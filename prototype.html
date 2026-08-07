@@ -1,0 +1,693 @@
+<!DOCTYPE html>
+<html lang="zh">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>LURE · Water + Boat Prototype</title>
+    <style>
+      * { margin: 0; padding: 0; box-sizing: border-box; }
+      html, body { width: 100%; height: 100%; overflow: hidden; background: #000; }
+
+      /* ────────────────────────────────────────────────────────────
+         16:9 画幅锁定：#viewport-frame 铺满窗口（黑色letterbox背景），
+         #stage 是居中的固定 16:9 矩形，尺寸由 main.ts 按窗口算出后写 style。
+         游戏画面、HUD、背包、展示视频全部挂在 #stage 内部，
+         这样不管浏览器窗口比例如何，"游戏画面"本身永远是 16:9。
+         ──────────────────────────────────────────────────────────── */
+      #viewport-frame {
+        position: fixed; inset: 0;
+        background: #000;
+        display: flex; align-items: center; justify-content: center;
+        overflow: hidden;
+      }
+      #stage {
+        position: relative;
+        background: #87b3d1;
+        overflow: hidden;
+        box-shadow: 0 0 40px rgba(0, 0, 0, 0.6);
+      }
+      #app { position: absolute; inset: 0; }
+      #hint {
+        position: absolute; left: 12px; top: 12px; z-index: 10;
+        font-family: -apple-system, "Segoe UI", sans-serif;
+        color: #fff; font-size: 12px; line-height: 1.6;
+        background: rgba(0, 0, 0, 0.35); padding: 8px 12px; border-radius: 6px;
+        backdrop-filter: blur(6px); pointer-events: none;
+      }
+      #hint b { color: #ffd166; }
+
+      #exit-btn, #map-btn {
+        position: absolute; z-index: 20;
+        font-family: -apple-system, "Segoe UI", sans-serif;
+        color: #fff;
+        border: none; cursor: pointer; user-select: none;
+        backdrop-filter: blur(8px);
+        transition: background 0.15s ease, transform 0.1s ease, box-shadow 0.15s ease;
+      }
+      #exit-btn {
+        right: 16px; bottom: 16px;
+        font-size: 13px; font-weight: 600;
+        padding: 10px 16px; border-radius: 8px;
+        background: rgba(20, 30, 50, 0.72);
+        box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35), 0 0 0 1px rgba(255, 255, 255, 0.08) inset;
+      }
+      #exit-btn:hover  { background: rgba(40, 60, 90, 0.85); }
+      #exit-btn:active { transform: translateY(1px); }
+
+      /* 航海地图返回按钮 —— 玩家在游戏内随时可以点它回地图选新的海域 */
+      #map-btn {
+        right: 16px; top: 16px;
+        display: flex; align-items: center; gap: 10px;
+        font-size: 14px; font-weight: 700;
+        letter-spacing: 1px;
+        padding: 10px 16px 10px 12px;
+        border-radius: 999px;
+        background: linear-gradient(180deg, rgba(80, 55, 25, 0.92) 0%, rgba(50, 32, 12, 0.92) 100%);
+        border: 1.5px solid rgba(255, 216, 138, 0.65);
+        box-shadow:
+          0 6px 20px rgba(0, 0, 0, 0.5),
+          0 0 0 1px rgba(0, 0, 0, 0.4),
+          0 0 22px rgba(255, 216, 138, 0.15);
+      }
+      #map-btn .map-btn-icon { font-size: 18px; line-height: 1; }
+      #map-btn .map-btn-key {
+        display: inline-block;
+        min-width: 20px;
+        padding: 1px 7px;
+        margin-left: 4px;
+        border-radius: 4px;
+        background: rgba(255, 216, 138, 0.22);
+        color: #ffd88a;
+        font-family: ui-monospace, "SF Mono", Consolas, monospace;
+        font-size: 12px;
+        text-align: center;
+        box-shadow: 0 0 0 1px rgba(255, 216, 138, 0.6) inset;
+      }
+      #map-btn:hover  {
+        background: linear-gradient(180deg, rgba(120, 80, 35, 0.98) 0%, rgba(75, 50, 20, 0.98) 100%);
+        box-shadow: 0 6px 20px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(0, 0, 0, 0.4), 0 0 30px rgba(255, 216, 138, 0.5);
+      }
+      #map-btn:active { transform: translateY(1px); }
+
+      #hud {
+        position: absolute; left: 12px; bottom: 12px; z-index: 10;
+        font-family: ui-monospace, "SF Mono", Consolas, monospace;
+        color: #fff; font-size: 13px; line-height: 1.4;
+        background: rgba(0, 0, 0, 0.4); padding: 8px 14px; border-radius: 6px;
+        backdrop-filter: blur(6px); pointer-events: none;
+      }
+      #hud b { color: #4dd0ff; font-size: 15px; font-weight: 600; }
+
+      /* ─── 钓鱼 HUD（三键博弈版：上方状态文字 + 张力条 + 常驻三按钮 + 结果卡） ─── */
+      #fishing-hud {
+        position: absolute; inset: 0; z-index: 100;
+        pointer-events: none;
+        opacity: 0;
+        transition: opacity 0.25s ease;
+        font-family: -apple-system, "Segoe UI", sans-serif;
+        color: #fff;
+      }
+      #fishing-hud.visible { opacity: 1; }
+
+      /* 上方状态文字："等咬钩…" / "鱼在用力拉扯！" 等 */
+      .fg-hud-hint {
+        position: absolute; left: 50%; bottom: 200px;
+        transform: translateX(-50%);
+        font-size: 15px;
+        padding: 10px 22px;
+        background: rgba(8, 12, 20, 0.7);
+        border-radius: 999px;
+        box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.08) inset;
+        backdrop-filter: blur(6px);
+        white-space: nowrap;
+      }
+      .fg-hud-hint b { color: #ffd88a; }
+      .fg-hud-hint.pulse { animation: fg-pulse 0.5s ease-out 2; }
+      @keyframes fg-pulse {
+        0%   { transform: translateX(-50%) scale(1); }
+        50%  { transform: translateX(-50%) scale(1.10); box-shadow: 0 0 30px rgba(255, 216, 138, 0.6), 0 4px 20px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255, 216, 138, 0.5) inset; }
+        100% { transform: translateX(-50%) scale(1); }
+      }
+      .fg-key {
+        display: inline-block;
+        min-width: 22px;
+        padding: 1px 8px;
+        margin: 0 3px;
+        border-radius: 4px;
+        background: rgba(255, 216, 138, 0.25);
+        color: #ffd88a;
+        font-family: ui-monospace, "SF Mono", Consolas, monospace;
+        font-size: 13px;
+        text-align: center;
+        box-shadow: 0 0 0 1px rgba(255, 216, 138, 0.5) inset;
+      }
+
+      /* ── 钓鱼状态条：左圆圈 = 鱼体力（会消耗）｜ 右长条 = 鱼线张力（游标左→右移动）── */
+      .fg-hud-tension {
+        position: absolute; left: 50%; bottom: 122px;
+        transform: translateX(-50%);
+        display: flex; align-items: center;
+        gap: 48px;
+        pointer-events: none;
+      }
+      /* 左侧圆圈：鱼体力表盘 —— 环形绿色填充随博弈逐渐消耗 */
+      .fg-hud-stamina-dial {
+        --stamina: 1;   /* 0..1，由 FishingGame 每帧写入 */
+        position: relative;
+        width: 48px; height: 48px;
+        border-radius: 50%;
+        /* 环状渐变：0..stamina 的角度是"体力剩余色"，之后是暗色空槽 */
+        background: conic-gradient(
+          from -90deg,
+          #6ec37a 0deg,
+          #6ec37a calc(var(--stamina) * 360deg),
+          rgba(30, 22, 14, 0.85) calc(var(--stamina) * 360deg),
+          rgba(30, 22, 14, 0.85) 360deg);
+        box-shadow:
+          0 0 0 2.5px #f0d9a8 inset,
+          0 4px 16px rgba(0, 0, 0, 0.5),
+          0 0 0 1px rgba(0, 0, 0, 0.4);
+        display: flex; align-items: center; justify-content: center;
+        flex: none;
+        transition: background 0.12s linear;
+      }
+      /* 中心内圆（黑色）—— 把外圈渐变裁成"环"的观感 */
+      .fg-hud-stamina-dial::before {
+        content: '';
+        position: absolute; inset: 5px;
+        border-radius: 50%;
+        background: rgba(8, 12, 20, 0.9);
+      }
+      /* 里面的小鱼图标 */
+      .fg-hud-stamina-dial svg {
+        position: relative;   /* 高过 ::before */
+        width: 26px; height: 18px;
+        display: block;
+      }
+      /* 圆圈下方"鱼体力"标签 */
+      .fg-hud-stamina-dial::after {
+        content: '鱼体力';
+        position: absolute; top: 100%; left: 50%; margin-top: 6px;
+        transform: translateX(-50%);
+        font-size: 12px; font-weight: 600; color: #e5e0d0;
+        letter-spacing: 1px;
+        white-space: nowrap;
+        text-shadow: 0 1px 3px rgba(0, 0, 0, 0.6);
+      }
+
+      /* 右侧长条：鱼线张力 —— 左侧绿色安全、中段黄色警戒、右侧红色危险 */
+      .fg-hud-tension-bar {
+        position: relative;
+        width: 420px; height: 14px;
+        border-radius: 999px;
+        background: linear-gradient(to right,
+          #55c96f 0%, #55c96f 42%,
+          #f5c033 42%, #f5c033 72%,
+          #e14e3d 72%, #e14e3d 100%);
+        box-shadow:
+          0 0 0 2px rgba(0, 0, 0, 0.5),
+          0 0 0 3.5px rgba(240, 217, 168, 0.75),
+          0 6px 20px rgba(0, 0, 0, 0.5);
+      }
+      /* 游标：鱼形圆形，随张力从左端滑到右端 */
+      .fg-hud-tension-marker {
+        position: absolute; left: 0%; top: 50%;
+        transform: translate(-50%, -50%);
+        width: 26px; height: 26px;
+        border-radius: 50%;
+        background: #6b9c5c;
+        display: flex; align-items: center; justify-content: center;
+        box-shadow:
+          0 0 0 2.5px #f5f2e5,
+          0 0 0 3.5px rgba(0, 0, 0, 0.5),
+          0 6px 14px rgba(0, 0, 0, 0.5);
+        transition: left 0.10s linear, background 0.15s ease;
+      }
+      .fg-hud-tension-marker svg { width: 16px; height: 10px; display: block; }
+
+      /* 常驻三按钮提示条（参考图风格：收线 / 对抗拉力 / 取消，横排在最底部） */
+      .fg-hud-buttons {
+        position: absolute; left: 50%; bottom: 44px;
+        transform: translateX(-50%);
+        display: flex; gap: 14px;
+      }
+      .fg-hud-btn {
+        display: flex; align-items: center; gap: 8px;
+        padding: 8px 16px;
+        background: rgba(8, 12, 20, 0.65);
+        border-radius: 999px;
+        box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4), 0 0 0 1px rgba(255, 255, 255, 0.06) inset;
+        backdrop-filter: blur(6px);
+        font-size: 13px;
+        color: #9cb6d4;
+        opacity: 0.55;
+        transition: opacity 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease;
+        white-space: nowrap;
+      }
+      .fg-hud-btn .fg-mouse-icon {
+        width: 16px; height: 24px;
+        border: 2px solid currentColor;
+        border-radius: 8px;
+        position: relative;
+        flex: none;
+      }
+      .fg-hud-btn .fg-mouse-icon::after {
+        content: '';
+        position: absolute; left: 50%; top: 3px;
+        width: 2px; height: 6px;
+        background: currentColor;
+        border-radius: 1px;
+        transform: translateX(-50%);
+      }
+      .fg-hud-btn.dim { opacity: 0.3; }
+      .fg-hud-btn.active {
+        opacity: 1;
+        color: #fff;
+        box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4), 0 0 0 1px rgba(255, 216, 138, 0.55) inset, 0 0 18px rgba(255, 216, 138, 0.35);
+      }
+      .fg-hud-btn.active .fg-mouse-icon { color: #ffd88a; }
+      .fg-hud-btn.urgent {
+        animation: fg-btn-urgent 0.5s ease-in-out infinite;
+      }
+      @keyframes fg-btn-urgent {
+        0%, 100% { box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4), 0 0 0 1px rgba(239, 68, 68, 0.6) inset, 0 0 10px rgba(239, 68, 68, 0.3); }
+        50%      { box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4), 0 0 0 1px rgba(239, 68, 68, 1) inset, 0 0 26px rgba(239, 68, 68, 0.8); transform: scale(1.06); }
+      }
+
+      /* 结果卡（居中，成功 2.8s / 失败 1.6s 后自动关） */
+      .fg-hud-result {
+        position: absolute; left: 50%; top: 42%;
+        transform: translate(-50%, -50%) scale(0.85);
+        padding: 28px 56px;
+        background: rgba(10, 15, 25, 0.92);
+        border-radius: 22px;
+        text-align: center;
+        opacity: 0;
+        pointer-events: none;
+        transition: opacity 0.28s ease, transform 0.32s cubic-bezier(0.34, 1.56, 0.64, 1);
+        box-shadow: 0 12px 48px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(255, 255, 255, 0.1) inset;
+        min-width: 320px;
+      }
+      .fg-hud-result.visible {
+        opacity: 1;
+        transform: translate(-50%, -50%) scale(1);
+      }
+      .fg-hud-result.success {
+        background: rgba(20, 40, 30, 0.94);
+        box-shadow:
+          0 16px 64px rgba(255, 216, 138, 0.35),
+          0 0 0 2px rgba(255, 216, 138, 0.85) inset,
+          0 0 48px rgba(255, 216, 138, 0.25) inset;
+        animation: fg-result-glow 1.4s ease-in-out infinite alternate;
+      }
+      @keyframes fg-result-glow {
+        from { box-shadow: 0 16px 64px rgba(255, 216, 138, 0.35), 0 0 0 2px rgba(255, 216, 138, 0.85) inset, 0 0 48px rgba(255, 216, 138, 0.20) inset; }
+        to   { box-shadow: 0 16px 64px rgba(255, 216, 138, 0.55), 0 0 0 2px rgba(255, 216, 138, 1.0)  inset, 0 0 64px rgba(255, 216, 138, 0.40) inset; }
+      }
+      .fg-hud-result.fail {
+        box-shadow: 0 12px 48px rgba(239, 68, 68, 0.35), 0 0 0 1px rgba(239, 68, 68, 0.5) inset;
+      }
+      .fg-hud-result-title { font-size: 30px; font-weight: 700; margin-bottom: 8px; letter-spacing: 0.5px; }
+      .fg-hud-result.success .fg-hud-result-title b { color: #ffd88a; font-size: 34px; }
+      .fg-hud-result-sub   { font-size: 13px; color: #9cb6d4; }
+      .fg-hud-result.success .fg-hud-result-sub { color: #cbe6cf; }
+
+      /* 钓鱼点靠近提示：屏幕下 1/3 处居中的一个半透明胶囊按钮样式 */
+      #fishing-prompt {
+        position: absolute; left: 50%; bottom: 22%; z-index: 15;
+        transform: translateX(-50%) scale(0.95);
+        font-family: -apple-system, "Segoe UI", sans-serif;
+        font-size: 15px; font-weight: 600; color: #fff;
+        padding: 12px 22px; border-radius: 999px;
+        background: rgba(20, 25, 40, 0.7);
+        backdrop-filter: blur(10px);
+        box-shadow:
+          0 4px 24px rgba(0, 0, 0, 0.35),
+          0 0 0 1px rgba(255, 255, 255, 0.12) inset,
+          0 0 32px rgba(255, 216, 138, 0.35);
+        pointer-events: none;
+        opacity: 0;
+        transition: opacity 0.18s ease, transform 0.18s ease;
+        white-space: nowrap;
+      }
+      #fishing-prompt.visible {
+        opacity: 1;
+        transform: translateX(-50%) scale(1);
+      }
+      #fishing-prompt .key {
+        display: inline-block;
+        min-width: 22px;
+        padding: 2px 8px;
+        margin-right: 8px;
+        border-radius: 4px;
+        background: rgba(255, 216, 138, 0.25);
+        color: #ffd88a;
+        font-family: ui-monospace, "SF Mono", Consolas, monospace;
+        font-size: 14px;
+        text-align: center;
+        box-shadow: 0 0 0 1px rgba(255, 216, 138, 0.5) inset;
+      }
+
+      /* ────────────────────────────────────────────────────────────
+         背包（Dredge 风格：木质深色船仓框 + 连续鱼身 + 绿色高亮）
+         ──────────────────────────────────────────────────────────── */
+      .inv-panel {
+        position: absolute; inset: 0; z-index: 200;
+        display: none;
+        background: rgba(6, 10, 18, 0.72);
+        backdrop-filter: blur(8px);
+        font-family: -apple-system, "Segoe UI", "PingFang SC", sans-serif;
+        color: #eaeef2;
+      }
+      .inv-panel.open {
+        display: flex; align-items: center; justify-content: center;
+      }
+      .inv-outer {
+        max-width: 780px;
+        width: min(92vw, 780px);
+      }
+      /* 主框架：木质双层边框 + 深色内部 */
+      .inv-frame {
+        position: relative;
+        border-radius: 14px;
+        padding: 0;
+        background: linear-gradient(180deg, #6d4a2a 0%, #4a2f19 100%);
+        box-shadow:
+          0 24px 72px rgba(0, 0, 0, 0.6),
+          0 0 0 3px #2a190c inset,
+          0 0 0 12px #6d4a2a inset,
+          0 0 0 15px #2a190c inset;
+        padding: 22px 22px 18px;
+      }
+      /* 标题栏：像 Dredge 那样一块"匾额" */
+      .inv-titlebar {
+        position: absolute;
+        left: 50%; top: -18px;
+        transform: translateX(-50%);
+        padding: 6px 42px;
+        background: linear-gradient(180deg, #7d5732 0%, #4d3218 100%);
+        border-radius: 6px;
+        box-shadow:
+          0 4px 12px rgba(0, 0, 0, 0.55),
+          0 0 0 2px #2a190c inset,
+          0 0 0 4px #7d5732 inset;
+      }
+      .inv-title-text {
+        font-size: 20px; font-weight: 700; letter-spacing: 6px;
+        color: #f3d9a8;
+        text-shadow: 0 1px 2px rgba(0, 0, 0, 0.55);
+      }
+      /* 顶部信息栏：船速/捕捞速度/灯 + 受损 */
+      .inv-topbar {
+        display: flex; justify-content: space-between; align-items: flex-start;
+        gap: 16px;
+        margin: 12px 4px 14px;
+        padding: 12px 16px;
+        background: rgba(20, 12, 6, 0.6);
+        border-radius: 6px;
+        box-shadow: 0 0 0 1px rgba(200, 150, 90, 0.25) inset;
+      }
+      .inv-stats {
+        display: flex; flex-direction: column; gap: 4px;
+        font-size: 13px;
+      }
+      .inv-stat { display: flex; gap: 10px; }
+      .inv-stat-k { color: #a89078; min-width: 68px; }
+      .inv-stat-v { color: #f0e5d0; font-weight: 600; }
+      .inv-damage {
+        display: flex; align-items: center; gap: 8px;
+        font-size: 13px;
+        color: #a89078;
+        align-self: flex-start;
+      }
+      .inv-damage-boxes { display: flex; gap: 4px; }
+      .inv-damage-box {
+        display: inline-block; width: 16px; height: 16px;
+        background:
+          repeating-linear-gradient(45deg,
+            rgba(200, 60, 60, 0.35) 0 3px,
+            rgba(120, 30, 30, 0.35) 3px 6px);
+        box-shadow: 0 0 0 1px rgba(200, 60, 60, 0.6) inset;
+        border-radius: 2px;
+      }
+      /* 主体：网格 + 侧栏 */
+      .inv-body {
+        display: flex; align-items: flex-start; justify-content: center;
+        gap: 20px;
+      }
+      /* 网格外框 —— 参考图的深色木盒 */
+      .inv-grid-wrap {
+        position: relative;
+        padding: 18px;
+        border-radius: 10px;
+        background:
+          radial-gradient(ellipse at top, rgba(0, 0, 0, 0.15), transparent 70%),
+          linear-gradient(180deg, #1a1109 0%, #0d0805 100%);
+        box-shadow:
+          0 0 0 2px rgba(120, 80, 40, 0.55) inset,
+          0 12px 32px rgba(0, 0, 0, 0.5) inset;
+      }
+      .inv-grid, .inv-items, .inv-preview {
+        position: relative;
+      }
+      /* 让鱼的尾鳍能溢出到格外（不被裁掉） */
+      .inv-items, .inv-preview {
+        position: absolute; left: 18px; top: 18px;
+        pointer-events: none;
+        overflow: visible;
+      }
+      .inv-items { pointer-events: auto; }
+      /* 网格格子：暗色底 + 红棕色细线描边（参考渔帆暗涌） */
+      .inv-cell {
+        position: absolute;
+        background: rgba(24, 16, 10, 0.55);
+        box-shadow:
+          0 0 0 1px rgba(140, 60, 40, 0.45) inset;
+      }
+      .inv-cell.blocked {
+        background:
+          repeating-linear-gradient(45deg,
+            rgba(70, 30, 18, 0.85) 0 6px,
+            rgba(30, 12, 8, 0.85) 6px 12px);
+        box-shadow: 0 0 0 1px rgba(120, 50, 30, 0.8) inset;
+      }
+      /* 已放置的鱼 + 拖动幻影 —— 允许 SVG 尾鳍溢出显示 */
+      .inv-item, .inv-ghost {
+        position: absolute;
+        cursor: grab;
+        transition: filter 0.12s;
+        overflow: visible;
+      }
+      .inv-item:hover { filter: brightness(1.08); }
+      .inv-item:active { cursor: grabbing; }
+      .inv-ghost {
+        position: fixed;
+        top: 0; left: 0;
+        pointer-events: none;
+        opacity: 0.92;
+        z-index: 300;
+        filter: drop-shadow(0 8px 16px rgba(0, 0, 0, 0.55));
+      }
+      /* 鱼身占格：只显示背景色（渐变），不显示内部格线，避免鱼身被分割感 */
+      .inv-item-cell {
+        position: absolute;
+      }
+      .inv-item-icon {
+        display: none;
+      }
+      /* 落点预览 */
+      .inv-preview-cell {
+        position: absolute;
+        border-radius: 4px;
+        pointer-events: none;
+      }
+      .inv-preview-cell.ok {
+        background: rgba(74, 222, 128, 0.30);
+        box-shadow: 0 0 0 2px rgba(74, 222, 128, 0.95) inset;
+      }
+      .inv-preview-cell.bad {
+        background: rgba(239, 68, 68, 0.30);
+        box-shadow: 0 0 0 2px rgba(239, 68, 68, 0.95) inset;
+      }
+      /* 侧栏：待放入槽 */
+      .inv-tray {
+        width: 168px;
+        padding: 14px 12px;
+        border-radius: 8px;
+        background: rgba(20, 12, 6, 0.5);
+        box-shadow: 0 0 0 1px rgba(200, 150, 90, 0.28) inset;
+        display: flex; flex-direction: column; gap: 10px;
+      }
+      .inv-tray-title {
+        font-size: 12px; font-weight: 700; letter-spacing: 2px;
+        color: #f3d9a8; text-align: center;
+        padding-bottom: 6px;
+        border-bottom: 1px solid rgba(200, 150, 90, 0.28);
+      }
+      .inv-tray-slots {
+        display: flex; flex-wrap: wrap; gap: 8px; justify-content: center;
+        min-height: 90px;
+      }
+      .inv-tray-item {
+        cursor: grab;
+        padding: 14px 18px 10px;
+        border-radius: 6px;
+        background: rgba(255, 255, 255, 0.05);
+        box-shadow: 0 0 0 1px rgba(255, 216, 138, 0.35) inset;
+        transition: transform 0.1s, background 0.15s;
+        position: relative;
+        display: flex; flex-direction: column; align-items: center; gap: 6px;
+        overflow: visible;
+      }
+      .inv-tray-item:hover {
+        background: rgba(255, 216, 138, 0.14);
+        transform: translateY(-1px);
+        box-shadow: 0 4px 12px rgba(0,0,0,0.4), 0 0 0 1px rgba(255, 216, 138, 0.85) inset;
+      }
+      .inv-tray-item-shape {
+        position: relative;
+        overflow: visible;
+      }
+      .inv-tray-item-name {
+        font-size: 11px; color: #f0e5d0;
+      }
+      .inv-hint {
+        text-align: center;
+        color: #a89078; font-size: 12px;
+        padding: 12px 0 4px;
+      }
+      .inv-hint b { color: #ffd88a; }
+
+      /* 打开背包时右下角"提示"（钓到鱼 / 满仓警告） */
+      #inv-toast {
+        position: absolute; right: 24px; bottom: 24px; z-index: 250;
+        padding: 12px 20px;
+        background: linear-gradient(180deg, rgba(180, 120, 60, 0.98) 0%, rgba(120, 70, 30, 0.98) 100%);
+        color: #fff4dc; font-size: 13px; font-weight: 700; letter-spacing: 1px;
+        border-radius: 6px;
+        box-shadow:
+          0 6px 20px rgba(0, 0, 0, 0.5),
+          0 0 0 1px rgba(50, 30, 15, 0.9) inset,
+          0 0 0 3px rgba(180, 120, 60, 0.8) inset;
+        pointer-events: none;
+        opacity: 0;
+        transform: translateY(10px);
+        transition: opacity 0.25s ease, transform 0.25s ease;
+      }
+      #inv-toast.visible {
+        opacity: 1;
+        transform: translateY(0);
+      }
+
+      /* ─── 钓上鱼后的战利品展示视频（16:9，铺满 #stage，播完/点击跳过后回到正常游戏） ─── */
+      #fish-showcase {
+        position: absolute; inset: 0; z-index: 400;
+        background: #000;
+        display: none;
+        align-items: center; justify-content: center;
+        cursor: pointer;
+      }
+      #fish-showcase.visible { display: flex; }
+      #fish-showcase-video {
+        width: 100%; height: 100%;
+        object-fit: cover;
+        display: block;
+        background: #000;
+      }
+      #fish-showcase-skip {
+        position: absolute; right: 16px; bottom: 16px; z-index: 401;
+        font-family: -apple-system, "Segoe UI", sans-serif;
+        font-size: 12px; color: #fff;
+        padding: 7px 14px; border-radius: 999px;
+        background: rgba(0, 0, 0, 0.5);
+        backdrop-filter: blur(6px);
+        box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.15) inset;
+        opacity: 0.85;
+        pointer-events: none;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="viewport-frame">
+      <div id="stage">
+        <div id="app"></div>
+        <div id="hint">
+          <b>LURE · Water + Boat Prototype</b><br />
+          <b>W</b> 前进 · <b>S</b> 后退 · <b>A/D</b> 转向 · <b>Shift</b> 慢速 · <b>F</b> 钓鱼 · <b>I</b> 背包 · <b>M</b> 航海地图<br />
+          鼠标拖拽：环视 &nbsp;·&nbsp; 滚轮：视野
+        </div>
+        <div id="hud">
+          <div>速度 <b id="hud-speed">0.0</b> m/s</div>
+        </div>
+        <div id="fishing-prompt"><span class="key">F</span>抛竿钓鱼</div>
+
+        <div id="inv-toast">背包已满 —— 请整理后再钓</div>
+
+        <div id="fishing-hud">
+          <div class="fg-hud-hint">准备中…</div>
+          <div class="fg-hud-tension">
+            <!-- 左圆圈：鱼体力表盘（--stamina 由 FishingGame 每帧写入 0..1） -->
+            <div class="fg-hud-stamina-dial" style="--stamina: 1;">
+              <svg viewBox="0 0 30 20" xmlns="http://www.w3.org/2000/svg">
+                <path d="M3 10 Q7 4 15 5 Q22 6 25 10 Q22 14 15 15 Q7 16 3 10 Z" fill="#a8d888" stroke="#4a6a3a" stroke-width="1"/>
+                <path d="M25 10 L30 5 L30 15 Z" fill="#a8d888" stroke="#4a6a3a" stroke-width="1"/>
+                <circle cx="10" cy="9" r="1.2" fill="#2a3a1a"/>
+              </svg>
+            </div>
+            <!-- 右长条：鱼线张力（左绿→右红），游标从左往右滑 -->
+            <div class="fg-hud-tension-bar">
+              <div class="fg-hud-tension-marker">
+                <svg viewBox="0 0 30 20" xmlns="http://www.w3.org/2000/svg">
+                  <path d="M3 10 Q7 4 15 5 Q22 6 25 10 Q22 14 15 15 Q7 16 3 10 Z" fill="#f5f2e5"/>
+                  <path d="M25 10 L30 5 L30 15 Z" fill="#f5f2e5"/>
+                  <circle cx="10" cy="9" r="1.2" fill="#2a3a1a"/>
+                </svg>
+              </div>
+            </div>
+          </div>
+          <div class="fg-hud-buttons">
+            <div class="fg-hud-btn fg-hud-btn-reel"><span class="fg-mouse-icon"></span>鼠标左键 · 连击收线</div>
+            <div class="fg-hud-btn fg-hud-btn-counter"><span class="fg-mouse-icon"></span>鼠标中键 + 反向拖动 · 对抗</div>
+            <div class="fg-hud-btn fg-hud-btn-cancel"><span class="fg-mouse-icon"></span>鼠标右键 · 取消</div>
+          </div>
+          <div class="fg-hud-result">
+            <div class="fg-hud-result-title"></div>
+            <div class="fg-hud-result-sub"></div>
+          </div>
+        </div>
+
+        <div id="fish-showcase">
+          <video id="fish-showcase-video" src="/videos/fish-showcase.mp4" muted playsinline preload="auto"></video>
+          <div id="fish-showcase-skip">点击 / 按任意键跳过</div>
+        </div>
+
+        <button id="map-btn" title="打开航海地图 (M)">
+          <span class="map-btn-icon">🗺</span>
+          <span>航海地图</span>
+          <span class="map-btn-key">M</span>
+        </button>
+        <button id="exit-btn" title="返回编辑器">← 返回编辑器</button>
+      </div>
+    </div>
+    <script>
+      (function () {
+        var btn = document.getElementById('exit-btn');
+        function goEditor() {
+          // 如果是从编辑器 window.open 打开的，直接关掉窗口回到编辑器
+          if (window.opener && !window.opener.closed) {
+            window.close();
+            // 某些浏览器 window.close 无效时兜底跳转
+            setTimeout(function () { location.href = './editor.html'; }, 50);
+          } else {
+            location.href = './editor.html';
+          }
+        }
+        btn.addEventListener('click', goEditor);
+        // 注意：Esc 不再触发返回编辑器 —— 现在 Esc 归 MapUI 用（在地图打开时关闭地图）。
+        // 想返回编辑器改成点右下角按钮。若日后想恢复 Esc 返回可在这里补一个：
+        // 「地图关闭 && 无其他 UI 打开」时再触发 goEditor。
+      })();
+    </script>
+    <script type="module" src="/src/proto/main.ts"></script>
+  </body>
+</html>

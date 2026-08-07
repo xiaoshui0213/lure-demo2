@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>LURE · 钓鱼场景分层编辑器</title>
+    <style>
+      * { box-sizing: border-box; }
+      :root {
+        color-scheme: dark;
+        font-family: "Microsoft YaHei", "Segoe UI", sans-serif;
+        background: #09131d;
+        color: #e8e1d0;
+      }
+      html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; }
+      body { display: grid; grid-template-columns: minmax(0, 1fr) 340px; }
+      main {
+        min-width: 0;
+        display: grid;
+        place-items: center;
+        padding: 18px;
+        background: #07111a;
+      }
+      #scene-canvas {
+        position: relative;
+        width: min(100%, calc((100vh - 36px) * 16 / 9));
+        aspect-ratio: 16 / 9;
+        border: 1px solid #526472;
+        background: #86c8d4;
+      }
+      #scene-canvas.drag-over::after {
+        content: "松开鼠标，将图片添加为新图层";
+        position: absolute;
+        inset: 12px;
+        display: grid;
+        place-items: center;
+        border: 3px dashed #f0c978;
+        color: #fff1c5;
+        background: #102433cc;
+        font-size: 24px;
+        pointer-events: none;
+        z-index: 10;
+      }
+      #scene-canvas canvas { display: block; width: 100% !important; height: 100% !important; }
+      aside {
+        overflow: auto;
+        padding: 18px;
+        background: #12202b;
+        border-left: 1px solid #334653;
+      }
+      h1 { margin: 0 0 5px; font-size: 21px; }
+      .subtitle { margin: 0 0 16px; color: #91a9b7; font-size: 13px; line-height: 1.5; }
+      .toolbar { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 18px; }
+      button, .file-label {
+        border: 1px solid #647986;
+        padding: 9px 10px;
+        color: #f4ead0;
+        background: #294454;
+        cursor: pointer;
+        text-align: center;
+        font-size: 13px;
+      }
+      button:hover, .file-label:hover { background: #36596b; }
+      button:disabled { cursor: not-allowed; opacity: 0.45; background: #243640; }
+      .primary { background: #76563d; border-color: #ae8860; }
+      #import-file { display: none; }
+      h2 { margin: 17px 0 8px; font-size: 15px; color: #d9c99d; }
+      #layer-list { display: grid; gap: 5px; }
+      .layer-row {
+        display: grid;
+        grid-template-columns: 24px 28px 1fr auto;
+        align-items: center;
+        gap: 7px;
+        padding: 7px;
+        border: 1px solid #344b58;
+        background: #182a35;
+        cursor: pointer;
+      }
+      .layer-row.selected { border-color: #e0bc78; background: #30424a; }
+      .layer-row.locked { opacity: 0.7; }
+      .layer-row input { margin: 0; }
+      .layer-lock {
+        border: 0;
+        padding: 2px;
+        color: #9fb2bc;
+        background: transparent;
+        font-size: 14px;
+      }
+      .layer-lock.active { color: #f0c978; }
+      .depth-tag { color: #8fa7b5; font: 11px Consolas, monospace; }
+      .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; }
+      .scale-actions { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 6px; }
+      .scale-actions button { padding: 7px 6px; }
+      .layer-actions { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 6px; margin-bottom: 8px; }
+      label { display: grid; gap: 4px; color: #9fb2bc; font-size: 12px; }
+      .range-label { grid-template-columns: 1fr auto; align-items: center; }
+      .range-label input { grid-column: 1 / -1; }
+      output { color: #e5ca8c; font: 12px Consolas, monospace; }
+      input[type="number"], input[type="range"] {
+        width: 100%;
+        border: 1px solid #405865;
+        padding: 7px;
+        color: #e9e2d2;
+        background: #0e1b24;
+      }
+      .wide { grid-column: 1 / -1; }
+      .hint {
+        margin-top: 16px;
+        padding-top: 12px;
+        border-top: 1px solid #334653;
+        color: #8196a2;
+        font-size: 12px;
+        line-height: 1.6;
+      }
+      #status { min-height: 20px; margin-top: 10px; color: #d8bd7d; font-size: 12px; }
+    </style>
+  </head>
+  <body>
+    <main><div id="scene-canvas"></div></main>
+    <aside>
+      <h1>钓鱼场景分层编辑器</h1>
+      <p class="subtitle">可将 PNG 拖入画布编辑背景图层；右侧还可单独调整渔船、旅人、鱼竿。保存后刷新钓鱼 Demo 即可应用。</p>
+
+      <div class="toolbar">
+        <button id="save" class="primary">保存并应用</button>
+        <button id="open-game">打开钓鱼Demo</button>
+        <button id="export">导出JSON</button>
+        <label class="file-label" for="import-file">导入JSON</label>
+        <input id="import-file" type="file" accept="application/json" />
+        <button id="reset">恢复默认</button>
+      </div>
+
+      <h2>图层</h2>
+      <div class="layer-actions">
+        <button id="copy-layer">复制图层（Ctrl+C）</button>
+        <button id="paste-layer" disabled>粘贴图层（Ctrl+V）</button>
+        <button id="delete-layer" disabled>删除图层（Delete）</button>
+      </div>
+      <div id="layer-list"></div>
+
+      <h2 id="selected-title">图层参数</h2>
+      <div class="form-grid">
+        <label id="label-x">X坐标<input id="x" type="number" step="1" /></label>
+        <label id="label-y">Y坐标<input id="y" type="number" step="1" /></label>
+        <label id="label-width">显示宽度<input id="width" type="number" min="40" step="10" /></label>
+        <label id="label-height">显示高度（0=等比）<input id="height" type="number" min="0" step="10" /></label>
+        <label>层级 Depth<input id="depth" type="number" step="1" /></label>
+        <label id="field-parallax">视差系数<input id="parallax" type="number" min="0" max="1.5" step="0.01" /></label>
+        <label id="field-scale" class="wide">当前图层等比缩放<input id="scale" type="range" min="0.2" max="3" step="0.01" /></label>
+        <div id="field-scale-actions" class="scale-actions wide">
+          <button id="scale-down">缩小 10%</button>
+          <button id="scale-reset">重置尺寸</button>
+          <button id="scale-up">放大 10%</button>
+        </div>
+        <label id="field-stretch-x" class="wide range-label">
+          横向拉伸（PS左右缩放）<output id="stretch-x-value">100%</output>
+          <input id="stretch-x" type="range" min="0.2" max="3" step="0.01" />
+        </label>
+        <label id="field-stretch-y" class="wide range-label">
+          纵向拉伸（PS上下缩放）<output id="stretch-y-value">100%</output>
+          <input id="stretch-y" type="range" min="0.2" max="3" step="0.01" />
+        </label>
+        <button id="stretch-reset" class="wide field-stretch-reset-wrap">重置横向 / 纵向拉伸</button>
+        <label id="field-repeat" class="wide">
+          <span><input id="repeat-horizontal" type="checkbox" /> 横向PCG循环生成</span>
+        </label>
+        <label id="field-alpha" class="wide">透明度<input id="alpha" type="range" min="0" max="1" step="0.01" /></label>
+        <label id="field-rod-angle" class="wide" style="display:none">鱼竿角度（弧度）<input id="rod-angle" type="number" step="0.01" /></label>
+        <label id="field-waterline" class="wide">水面基准线<input id="waterline" type="number" min="200" max="650" step="1" /></label>
+      </div>
+
+      <div id="foam-section" class="wide" style="display:none">
+        <h2>岛屿吃水线泡沫</h2>
+        <div class="form-grid">
+          <label id="field-foam-visible" class="wide">
+            <span><input id="foam-visible" type="checkbox" /> 显示白色泡沫</span>
+          </label>
+          <label id="field-foam-waterline-y">吃水线 Y<input id="foam-waterline-y" type="number" step="1" /></label>
+          <label id="field-foam-y-offset">Y 微调<input id="foam-y-offset" type="number" step="1" /></label>
+          <label id="field-foam-half-width" class="wide range-label">
+            泡沫宽度比例<output id="foam-half-width-value">42%</output>
+            <input id="foam-half-width" type="range" min="0.15" max="0.65" step="0.01" />
+          </label>
+        </div>
+      </div>
+
+      <div id="boat-foam-section" class="wide" style="display:none">
+        <h2>船体吃水线泡沫</h2>
+        <div class="form-grid">
+          <label>泡沫线 Y 微调<input id="boat-foam-y-offset" type="number" step="1" /></label>
+          <label class="range-label">
+            泡沫线宽度<output id="boat-foam-half-width-value">130px</output>
+            <input id="boat-foam-half-width" type="range" min="40" max="260" step="1" />
+          </label>
+        </div>
+      </div>
+
+      <div id="water-flow-section" class="wide" style="display:none">
+        <h2>水面流动</h2>
+        <div class="form-grid">
+          <label>横向流速<input id="water-flow-speed-x" type="number" min="-80" max="80" step="0.5" /></label>
+          <label>速度变化<input id="water-flow-variation" type="number" min="0" max="40" step="0.5" /></label>
+          <label>上下浮动幅度<input id="water-flow-vertical-amount" type="number" min="0" max="20" step="0.1" /></label>
+          <label>上下浮动频率<input id="water-flow-vertical-speed" type="number" min="0" max="4" step="0.01" /></label>
+        </div>
+      </div>
+
+      <div id="status"></div>
+      <div class="hint">
+        鼠标拖动：移动当前图层<br />
+        点击图层旁的锁图标可禁止误拖、缩放和参数修改<br />
+        人物与船为合并图层；选中后可拖动橙色泡沫线单独调整吃水位置<br />
+        渔船 X 即游戏内屏幕锚点，保存后 Demo 与编辑器位置一致<br />
+        鼠标滚轮：等比缩放当前图层<br />
+        横向/纵向拉伸：只改变单轴比例，不改变位置<br />
+        Ctrl+C：复制当前图层　Ctrl+V：粘贴为新图层<br />
+        Delete：单独删除当前选中的任意图层<br />
+        从文件夹拖入图片：在放开鼠标的位置创建新图层<br />
+        方向键：微调1像素　Shift+方向键：微调10像素<br />
+        选中岛屿图层后，可拖动橙色吃水线或右侧表单调整白色泡沫位置<br />
+        选中水面图层后，可实时调整水面流速与上下浮动参数<br />
+        水面调整后，建议同步移动水下背景顶部。
+      </div>
+    </aside>
+    <script type="module" src="/src/fishing-scene-editor/main.ts"></script>
+  </body>
+</html>
