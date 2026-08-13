@@ -113,6 +113,17 @@
         line-height: 1.6;
       }
       #status { min-height: 20px; margin-top: 10px; color: #d8bd7d; font-size: 12px; }
+      .route-editor {
+        margin: 0 0 16px;
+        padding: 12px;
+        border: 1px solid #3c5360;
+        background: #0d1b25;
+      }
+      .route-editor label { grid-template-columns: 1fr auto; align-items: center; }
+      .route-editor input { grid-column: 1 / -1; width: 100%; }
+      .route-editor output { color: #f0c978; }
+      .route-actions { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 6px; margin-top: 8px; }
+      .route-actions button { padding: 6px; }
     </style>
   </head>
   <body>
@@ -129,6 +140,19 @@
         <input id="import-file" type="file" accept="application/json" />
         <button id="reset">恢复默认</button>
       </div>
+
+      <section id="route-editor" class="route-editor">
+        <label>
+          航程长画布位置
+          <output id="route-scroll-value">首屏 · 0m</output>
+          <input id="route-scroll" type="range" min="0" max="3000" step="10" value="0" />
+        </label>
+        <div class="route-actions">
+          <button id="route-start">首屏</button>
+          <button id="route-back">后退 500m</button>
+          <button id="route-forward">前进 500m</button>
+        </div>
+      </section>
 
       <h2>图层</h2>
       <div class="layer-actions">
@@ -189,9 +213,32 @@
         <div class="form-grid">
           <label>泡沫线 Y 微调<input id="boat-foam-y-offset" type="number" step="1" /></label>
           <label class="range-label">
-            泡沫线宽度<output id="boat-foam-half-width-value">130px</output>
+            泡沫线宽度<output id="boat-foam-half-width-value">105px</output>
             <input id="boat-foam-half-width" type="range" min="40" max="260" step="1" />
           </label>
+        </div>
+      </div>
+
+      <div id="character-glow-section" class="wide" style="display:none">
+        <h2>人物边缘辉光（新地图）</h2>
+        <div class="form-grid">
+          <label>水平位置 X<input id="glow-offset-x" type="number" step="1" /></label>
+          <label>垂直位置 Y<input id="glow-offset-y" type="number" step="1" /></label>
+          <label class="wide range-label">
+            横向范围<output id="glow-scale-x-value">100%</output>
+            <input id="glow-scale-x" type="range" min="0.2" max="3" step="0.01" />
+          </label>
+          <label class="wide range-label">
+            纵向范围<output id="glow-scale-y-value">100%</output>
+            <input id="glow-scale-y" type="range" min="0.2" max="3" step="0.01" />
+          </label>
+          <label>外扩半径<input id="glow-radius" type="number" min="0" max="60" step="0.5" /></label>
+          <label>辉光强度<input id="glow-strength" type="number" min="0" max="12" step="0.1" /></label>
+          <label class="wide range-label">
+            辉光透明度<output id="glow-alpha-value">72%</output>
+            <input id="glow-alpha" type="range" min="0" max="1" step="0.01" />
+          </label>
+          <button id="glow-reset" class="wide">重置辉光参数</button>
         </div>
       </div>
 
@@ -208,8 +255,10 @@
       <div id="status"></div>
       <div class="hint">
         鼠标拖动：移动当前图层<br />
+        航程长画布：拖动上方滑块查看并布置首屏之后的物体<br />
         点击图层旁的锁图标可禁止误拖、缩放和参数修改<br />
         人物与船为合并图层；选中后可拖动橙色泡沫线单独调整吃水位置<br />
+        新地图选中“人物与船”后，可实时调整人物辉光的位置、范围、强度和透明度<br />
         渔船 X 即游戏内屏幕锚点，保存后 Demo 与编辑器位置一致<br />
         鼠标滚轮：等比缩放当前图层<br />
         横向/纵向拉伸：只改变单轴比例，不改变位置<br />

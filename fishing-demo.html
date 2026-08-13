@@ -35,10 +35,167 @@
         width: 100% !important;
         height: 100% !important;
       }
+      #map-select {
+        position: fixed;
+        inset: 0;
+        z-index: 20;
+        display: none;
+        place-items: center;
+        overflow: hidden;
+        color: #eee7e3;
+        background: rgba(4, 7, 14, 0.52);
+        backdrop-filter: blur(2px);
+      }
+      .map-select-panel {
+        position: relative;
+        width: min(920px, calc(100vw - 48px));
+        padding: 42px 46px 48px;
+        border: 1px solid rgba(238, 226, 221, 0.28);
+        background: rgba(18, 22, 34, 0.58);
+        box-shadow: 0 22px 80px rgba(0, 0, 0, 0.45);
+        backdrop-filter: blur(18px);
+      }
+      .map-kicker {
+        margin: 0 0 8px;
+        color: #bfb0b3;
+        font-size: 13px;
+        letter-spacing: 0.42em;
+      }
+      .map-title {
+        margin: 0;
+        font-size: clamp(30px, 4vw, 46px);
+        font-weight: 300;
+        letter-spacing: 0.16em;
+      }
+      .map-rule {
+        width: 66px;
+        height: 1px;
+        margin: 20px 0 30px;
+        background: rgba(238, 226, 221, 0.62);
+      }
+      .map-close {
+        position: absolute;
+        top: 24px;
+        right: 26px;
+        width: 36px;
+        height: 36px;
+        border: 1px solid rgba(238, 226, 221, 0.3);
+        border-radius: 50%;
+        color: rgba(238, 226, 221, 0.78);
+        font: 300 18px/1 "Noto Serif SC", "SimSun", serif;
+        cursor: pointer;
+        background: rgba(12, 16, 28, 0.28);
+      }
+      .map-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 18px;
+      }
+      .map-card {
+        position: relative;
+        min-height: 260px;
+        padding: 0;
+        overflow: hidden;
+        border: 1px solid rgba(237, 226, 221, 0.28);
+        color: inherit;
+        text-align: left;
+        cursor: pointer;
+        background: #111827;
+        transition: transform 160ms ease, border-color 160ms ease;
+      }
+      .map-card:hover {
+        transform: translateY(-3px);
+        border-color: rgba(244, 235, 230, 0.72);
+      }
+      .map-card::before {
+        content: "";
+        position: absolute;
+        inset: 0;
+        background: linear-gradient(180deg, transparent 34%, rgba(4, 7, 14, 0.92));
+      }
+      .map-card--01 {
+        background: url("/fishing/replacement-v2/sky-base.png") center / cover;
+      }
+      .map-card--02 {
+        background: url("/fishing/maps/fishing-map-02/sky.jpg") center / cover;
+      }
+      .map-card-copy {
+        position: absolute;
+        right: 24px;
+        bottom: 22px;
+        left: 24px;
+      }
+      .map-number {
+        color: rgba(235, 226, 223, 0.6);
+        font-size: 11px;
+        letter-spacing: 0.3em;
+      }
+      .map-name {
+        display: block;
+        margin-top: 7px;
+        font-size: 24px;
+        font-weight: 300;
+        letter-spacing: 0.14em;
+      }
+      .map-subtitle {
+        display: block;
+        margin-top: 5px;
+        color: #bcb2b4;
+        font-size: 13px;
+        letter-spacing: 0.08em;
+      }
+      @media (max-width: 700px) {
+        .map-select-panel { padding: 30px 24px; }
+        .map-grid { grid-template-columns: 1fr; }
+        .map-card { min-height: 190px; }
+      }
     </style>
   </head>
   <body>
+    <section id="map-select" aria-label="选择钓鱼地图">
+      <div class="map-select-panel">
+        <button class="map-close" type="button" aria-label="关闭地图选择">×</button>
+        <p class="map-kicker">FISHING AREA</p>
+        <h1 class="map-title">选择出海水域</h1>
+        <div class="map-rule"></div>
+        <div class="map-grid">
+          <button class="map-card map-card--01" data-map="fishing-map-01">
+            <span class="map-card-copy">
+              <span class="map-number">AREA 01</span>
+              <strong class="map-name">平落湖</strong>
+              <span class="map-subtitle">暮色山林 · 宁静水域</span>
+            </span>
+          </button>
+          <button class="map-card map-card--02" data-map="fishing-map-02">
+            <span class="map-card-copy">
+              <span class="map-number">AREA 02</span>
+              <strong class="map-name">沉蓝遗迹</strong>
+              <span class="map-subtitle">废弃水域 · 深夜遗迹</span>
+            </span>
+          </button>
+        </div>
+      </div>
+    </section>
     <div id="game"></div>
+    <script>
+      const mapSelect = document.getElementById('map-select');
+      window.openFishingMapSelect = () => {
+        mapSelect.style.display = 'grid';
+      };
+      window.closeFishingMapSelect = () => {
+        mapSelect.style.display = 'none';
+      };
+      document.querySelector('.map-close').addEventListener('click', window.closeFishingMapSelect);
+      document.querySelectorAll('[data-map]').forEach((button) => {
+        button.addEventListener('click', () => {
+          if (window.selectFishingMap) {
+            window.selectFishingMap(button.dataset.map);
+          } else {
+            window.location.search = `?map=${button.dataset.map}`;
+          }
+        });
+      });
+    </script>
     <script type="module" src="/src/fishing-demo/main.ts"></script>
   </body>
 </html>

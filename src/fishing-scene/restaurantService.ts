@@ -7,6 +7,9 @@ import {
   loadRestaurantLightSettings,
   type RestaurantLightSettings,
 } from './restaurantLightSettings';
+import { loadRestaurantCharacterLayout } from './restaurantCharacterLayout';
+
+const CHARACTER_LAYOUT = loadRestaurantCharacterLayout();
 
 /**
  * 完全重构：仿《潜水员戴夫》前三个晚上的餐厅玩法（Bancho Sushi 教学阶段）。
@@ -129,7 +132,7 @@ const CUSTOMER_TEMPLATES: {
   skin: number;
   name: string;
 }[] = [
-  { body: 0x9a3f36, hair: 0x2e1a13, skin: 0xdcb28a, name: '码头搬运工' },
+  { body: 0x9a3f36, hair: 0x2e1a13, skin: 0xdcb28a, name: '年轻旅人' },
   { body: 0x3d5f82, hair: 0x1e2735, skin: 0xd8a982, name: '夜航水手' },
   { body: 0x6d8a5a, hair: 0x3a3624, skin: 0xd8b58a, name: '灯塔守' },
   { body: 0x9a7a4a, hair: 0x442e1c, skin: 0xd6a17a, name: '邮差' },
@@ -143,8 +146,10 @@ const CUSTOMER_TEMPLATES: {
 const BAR_TOP_Y = 438;
 const BAR_FRONT_Y = 500;
 const CHEF_Y = 398;
+const CHEF_PROMPT_Y = CHEF_Y - 150;
 // 对齐新背景的椅面：角色身体底部约为 rootY + 29，椅面顶部约 y=529。
 const CUSTOMER_Y = 500;
+const CUSTOMER_ENTRY_Y = 560;
 const BUBBLE_Y_OFFSET = -74;
 const STATION_XS = [400, 640, 880];
 // 新背景共有 6 张椅子，坐标由 1024×576 原图等比换算到 1280×720。
@@ -239,6 +244,7 @@ type Customer = {
   bubbleTail: Phaser.GameObjects.Triangle;
   emote: Phaser.GameObjects.Text;
   bodyRoot: Phaser.GameObjects.Container;
+  characterSprite?: Phaser.GameObjects.Sprite;
   eatingPlate: Phaser.GameObjects.Container;
   eatingRice: Phaser.GameObjects.Rectangle;
   eatingTopper: Phaser.GameObjects.Arc;
@@ -262,6 +268,7 @@ type DirtyPlate = {
 
 type ChefState = {
   root: Phaser.GameObjects.Container;
+  sprite: Phaser.GameObjects.Sprite;
   x: number;
   facing: 1 | -1;
   heldSlotIndex: number;
@@ -333,6 +340,7 @@ export class RestaurantService {
   private shiftRemaining = SHIFT_MIN_S;
   private spawnTimer = 3;
   private guestsRemaining = 0;
+  private spawnedCustomerCount = 0;
   private finished = false;
   private closing = false;
   private closingReason = '';
@@ -544,6 +552,7 @@ export class RestaurantService {
     this.dirtyPlates = [];
     this.stationPlates.forEach((station) => station.root.setVisible(false));
     this.chef.root.setVisible(true).setPosition(640, CHEF_Y);
+    this.setChefWalking(false);
     this.chef.heldRoot.setVisible(false);
     this.lobbyMessageText.setText(message);
     this.attachWarmLightPipeline();
@@ -1360,18 +1369,124 @@ export class RestaurantService {
 
   private buildChef() {
     const root = this.scene.add.container(640, CHEF_Y);
-    const body = this.scene.add.rectangle(0, 12, 36, 44, CHEF_UNIFORM).setStrokeStyle(1, 0x9a8f7c);
-    const apron = this.scene.add.rectangle(0, 22, 26, 24, CHEF_APRON);
-    const head = this.scene.add.arc(0, -22, 15, 0, 360, false, CHEF_SKIN);
-    const hatBase = this.scene.add.rectangle(0, -35, 26, 6, CHEF_HAT).setStrokeStyle(1, 0xb0b0b0);
-    const hatTop = this.scene.add.arc(0, -44, 12, 0, 360, false, CHEF_HAT).setStrokeStyle(1, 0xb0b0b0);
-    const leftEye = this.scene.add.arc(-5, -22, 1.8, 0, 360, false, CHEF_EYE);
-    const rightEye = this.scene.add.arc(5, -22, 1.8, 0, 360, false, CHEF_EYE);
-    const scarf = this.scene.add.rectangle(0, -8, 22, 6, 0xb3543a);
-    root.add([body, apron, scarf, head, hatBase, hatTop, leftEye, rightEye]);
+    // 厨师站在后厨吧台后方：只显示到台面上沿，以下身体由背景中的吧台遮挡。
+    // 几何遮罩不加入显示列表，因此不会额外画出一块纯色台面。
+    const chefMaskShape = this.scene.make.graphics({ x: 0, y: 0, add: false });
+    chefMaskShape.fillStyle(0xffffff, 1).fillRect(
+      0,
+      0,
+      this.options.viewW,
+      BAR_TOP_Y - 10,
+    );
+    root.setMask(chefMaskShape.createGeometryMask());
+    const character = this.scene.add.graphics();
+
+    // 紫红外套与垂下的袖子，整体轮廓比旧版几何小人更柔和、厚实。
+    character.fillStyle(0x6f466d, 1);
+    character.fillPoints([
+      new Phaser.Geom.Point(-24, -18),
+      new Phaser.Geom.Point(-39, -3),
+      new Phaser.Geom.Point(-46, 36),
+      new Phaser.Geom.Point(-30, 42),
+      new Phaser.Geom.Point(-22, 24),
+      new Phaser.Geom.Point(-20, 43),
+      new Phaser.Geom.Point(20, 43),
+      new Phaser.Geom.Point(22, 24),
+      new Phaser.Geom.Point(30, 42),
+      new Phaser.Geom.Point(46, 36),
+      new Phaser.Geom.Point(39, -3),
+      new Phaser.Geom.Point(24, -18),
+    ], true);
+    character.lineStyle(1.2, 0xc18aa7, 0.5).strokePoints([
+      new Phaser.Geom.Point(-24, -18),
+      new Phaser.Geom.Point(-39, -3),
+      new Phaser.Geom.Point(-46, 36),
+      new Phaser.Geom.Point(-30, 42),
+      new Phaser.Geom.Point(-22, 24),
+      new Phaser.Geom.Point(-20, 43),
+      new Phaser.Geom.Point(20, 43),
+      new Phaser.Geom.Point(22, 24),
+      new Phaser.Geom.Point(30, 42),
+      new Phaser.Geom.Point(46, 36),
+      new Phaser.Geom.Point(39, -3),
+      new Phaser.Geom.Point(24, -18),
+    ], true, true);
+    character.fillStyle(0x885479, 0.78).fillRoundedRect(-27, -13, 54, 55, 12);
+
+    // 白围裙从腰部垂到吧台后方。
+    character.fillStyle(0xeee8e2, 0.96).fillRoundedRect(-23, 7, 46, 42, 5);
+    character.fillStyle(0xd8d1d2, 0.6).fillRect(-22, 9, 5, 38);
+    character.lineStyle(1, 0xffffff, 0.55).strokeRoundedRect(-23, 7, 46, 42, 5);
+    character.lineStyle(2, 0xe8dedc, 0.85).lineBetween(-22, 4, 22, 4);
+
+    // 外套门襟与参考图中的浅色抽绳。
+    character.lineStyle(1.4, 0xc696b1, 0.72).lineBetween(0, -7, 0, 13);
+    character.lineStyle(1.2, 0xe7d4db, 0.86);
+    character.lineBetween(-9, -8, -8, 10);
+    character.lineBetween(9, -8, 8, 10);
+    character.fillStyle(0xe7d4db, 0.9).fillCircle(-8, 11, 1.5).fillCircle(8, 11, 1.5);
+
+    // 脖颈与红色围巾。
+    character.fillStyle(0xd5a37f, 1).fillRoundedRect(-8, -28, 16, 15, 5);
+    character.fillStyle(0xa84f62, 1);
+    character.fillTriangle(-25, -18, 25, -18, 0, -3);
+    character.fillStyle(0xc15f70, 0.75).fillTriangle(-21, -18, 0, -7, -13, 3);
+
+    // 蓬松白发从脸部两侧包裹下来。
+    character.fillStyle(0xe9e2e0, 1);
+    character.fillCircle(-20, -53, 13);
+    character.fillCircle(20, -53, 13);
+    character.fillCircle(-18, -38, 12);
+    character.fillCircle(18, -38, 12);
+    character.fillCircle(-11, -66, 11);
+    character.fillCircle(11, -66, 11);
+    character.fillStyle(0xcfc8d0, 0.5);
+    character.fillCircle(-22, -43, 7);
+    character.fillCircle(21, -47, 6);
+
+    // 暖色圆脸与豆豆眼。
+    character.fillStyle(CHEF_SKIN, 1).fillEllipse(0, -48, 38, 43);
+    character.fillStyle(0xf0c2a0, 0.28);
+    character.fillCircle(-11, -42, 5);
+    character.fillCircle(11, -42, 5);
+    character.fillStyle(CHEF_EYE, 1);
+    character.fillCircle(-7, -51, 2.25);
+    character.fillCircle(7, -51, 2.25);
+    character.fillStyle(0x9c5e55, 0.8).fillCircle(0, -43, 1.3);
+    character.lineStyle(1.2, 0x9a5b5d, 0.72);
+    character.beginPath();
+    character.arc(0, -40, 4, 0.2, Math.PI - 0.2);
+    character.strokePath();
+
+    // 高筒白厨师帽：宽帽檐、柔软帽冠和几道淡灰褶皱。
+    character.fillStyle(0xd5cfd2, 0.78).fillRoundedRect(-25, -83, 50, 14, 5);
+    character.fillStyle(CHEF_HAT, 1).fillRoundedRect(-27, -88, 54, 14, 5);
+    character.fillStyle(0xf3eee8, 1).fillRoundedRect(-20, -126, 40, 44, 12);
+    character.fillCircle(-12, -120, 12);
+    character.fillCircle(0, -124, 13);
+    character.fillCircle(12, -120, 12);
+    character.fillStyle(0xd9d3d6, 0.42).fillRoundedRect(-17, -90, 5, 40, 3);
+    character.lineStyle(1, 0xc8c2c8, 0.42);
+    character.lineBetween(-17, -105, 17, -105);
+    character.lineBetween(-19, -91, 19, -91);
+
+    // 正式主角立绘替换旧的几何占位角色。完整人物底部继续由吧台遮罩裁切。
+    character.setVisible(false);
+    const characterSprite = this.scene.add.sprite(0, 45, 'restaurant-player-idle-front')
+      .setOrigin(0.5, 1)
+      .setPosition(
+        CHARACTER_LAYOUT.playerIdle.offsetX,
+        CHARACTER_LAYOUT.playerIdle.offsetY,
+      )
+      .setDisplaySize(
+        CHARACTER_LAYOUT.playerIdle.width,
+        CHARACTER_LAYOUT.playerIdle.height,
+      );
+    root.add([characterSprite, character]);
     this.shiftLayer.add(root);
 
-    const heldRoot = this.scene.add.container(0, -70).setVisible(false);
+    // 盘子拿在围裙前方，而不是悬在头顶。
+    const heldRoot = this.scene.add.container(0, -42).setVisible(false);
     const heldPlate = this.scene.add.arc(0, 0, 15, 0, 360, false, 0xf1ece1).setStrokeStyle(2, 0xffffff, 0.7);
     const heldRice = this.scene.add.rectangle(0, 2, 18, 8, 0xfaf4e6).setStrokeStyle(1, 0xd8cfb4, 0.9);
     const heldDot = this.scene.add.arc(0, -3, 10, 0, 360, false, 0xd98b4a).setStrokeStyle(1, 0xffffff, 0.6);
@@ -1380,6 +1495,7 @@ export class RestaurantService {
 
     this.chef = {
       root,
+      sprite: characterSprite,
       x: 640,
       facing: 1,
       heldSlotIndex: -1,
@@ -1601,7 +1717,7 @@ export class RestaurantService {
       .lineStyle(1, UI_BORDER, 0.5)
       .strokeRoundedRect(-140, -20, 280, 40, 10);
     this.interactPromptText = this.text(0, 0, '空格 · 拿盘', 16, COLOR_TITLE).setOrigin(0.5);
-    this.interactPrompt = this.scene.add.container(640, CHEF_Y - 96, [promptBg, this.interactPromptText]).setVisible(false);
+    this.interactPrompt = this.scene.add.container(640, CHEF_PROMPT_Y, [promptBg, this.interactPromptText]).setVisible(false);
     this.shiftHudLayer.add(this.interactPrompt);
 
     // 底部：参考图中的窄胶囊操作提示 + 描边打烊按钮。
@@ -1664,6 +1780,7 @@ export class RestaurantService {
     );
     this.shiftRemaining = this.shiftDuration;
     this.spawnTimer = 2.4;
+    this.spawnedCustomerCount = 0;
 
     // 原版循环：后厨只在收到订单后制作，不会提前把每道菜永久摆在台面。
     for (let i = 0; i < this.stationPlates.length; i += 1) {
@@ -1699,6 +1816,7 @@ export class RestaurantService {
     this.chef.x = 640;
     this.chef.facing = 1;
     this.chef.root.setPosition(this.chef.x, CHEF_Y);
+    this.setChefWalking(false);
     this.chef.heldSlotIndex = -1;
     this.chef.heldRoot.setVisible(false);
     this.activeTeaCustomer = null;
@@ -1770,7 +1888,8 @@ export class RestaurantService {
     // 倒茶时锁住走位，防止走开中断茶壶动作
     if (this.activeTeaCustomer) {
       this.chef.root.setPosition(this.chef.x, CHEF_Y);
-      this.chef.root.setScale(this.chef.facing * 1, 1);
+      this.chef.root.setScale(1, 1);
+      this.setChefWalking(false);
       return;
     }
     const left = this.keyA.isDown ? -1 : 0;
@@ -1779,9 +1898,44 @@ export class RestaurantService {
     if (dir !== 0) {
       this.chef.x = Phaser.Math.Clamp(this.chef.x + dir * CHEF_SPEED * dt, CHEF_X_MIN, CHEF_X_MAX);
       this.chef.facing = dir > 0 ? 1 : -1;
+      this.setChefWalking(true);
+    } else {
+      this.setChefWalking(false);
     }
     this.chef.root.setPosition(this.chef.x, CHEF_Y);
-    this.chef.root.setScale(this.chef.facing * 1, 1);
+    this.chef.root.setScale(dir === 0 ? 1 : this.chef.facing, 1);
+  }
+
+  private setChefWalking(walking: boolean) {
+    const sprite = this.chef.sprite;
+    if (walking) {
+      if (!sprite.anims.isPlaying || sprite.anims.currentAnim?.key !== 'restaurant-player-walk') {
+        sprite.play('restaurant-player-walk');
+      }
+      sprite
+        .setPosition(
+          CHARACTER_LAYOUT.playerWalk.offsetX,
+          CHARACTER_LAYOUT.playerWalk.offsetY,
+        )
+        .setDisplaySize(
+          CHARACTER_LAYOUT.playerWalk.width,
+          CHARACTER_LAYOUT.playerWalk.height,
+        );
+      return;
+    }
+    if (sprite.anims.isPlaying) sprite.anims.stop();
+    if (sprite.texture.key !== 'restaurant-player-idle-front') {
+      sprite.setTexture('restaurant-player-idle-front');
+    }
+    sprite
+      .setPosition(
+        CHARACTER_LAYOUT.playerIdle.offsetX,
+        CHARACTER_LAYOUT.playerIdle.offsetY,
+      )
+      .setDisplaySize(
+        CHARACTER_LAYOUT.playerIdle.width,
+        CHARACTER_LAYOUT.playerIdle.height,
+      );
   }
 
   private updateStations(dt: number) {
@@ -1831,16 +1985,32 @@ export class RestaurantService {
     for (const customer of [...this.customers]) {
       if (customer.state === 'entering') {
         const speed = CUSTOMER_WALK_SPEED;
-        const step = -speed * dt;
-        const newX = customer.root.x + step;
-        if (newX <= customer.seatX) {
-          customer.root.setPosition(customer.seatX, CUSTOMER_Y);
+        let reachedSeat = false;
+        if (customer.characterSprite) {
+          const seatRootX = customer.seatX - CHARACTER_LAYOUT.youngWomanSeated.offsetX;
+          // 新角色先沿前景走到目标椅子的正前方，再向后靠近椅子，避免穿过座位后瞬移。
+          if (customer.root.x > seatRootX) {
+            customer.root.x = Math.max(seatRootX, customer.root.x - speed * dt);
+          } else if (customer.root.y > CUSTOMER_Y) {
+            customer.root.y = Math.max(CUSTOMER_Y, customer.root.y - speed * 0.72 * dt);
+          } else {
+            reachedSeat = true;
+          }
+        } else {
+          const newX = customer.root.x - speed * dt;
+          if (newX <= customer.seatX) reachedSeat = true;
+          else customer.root.setPosition(newX, CUSTOMER_Y);
+        }
+        if (reachedSeat) {
+          const seatRootX = customer.characterSprite
+            ? customer.seatX - CHARACTER_LAYOUT.youngWomanSeated.offsetX
+            : customer.seatX;
+          customer.root.setPosition(seatRootX, CUSTOMER_Y);
           customer.state = 'seated';
           customer.facing = 1;
           customer.root.setScale(1, 1);
+          this.setCustomerCharacterPose(customer, 'seated');
           customer.bubble.setVisible(true);
-        } else {
-          customer.root.setPosition(newX, CUSTOMER_Y);
         }
       } else if (customer.state === 'seated') {
         if (customer !== this.activeTeaCustomer) customer.patience -= dt / CUSTOMER_PATIENCE_S;
@@ -1875,7 +2045,8 @@ export class RestaurantService {
         if (customer.eatingTimer <= 0) {
           customer.state = 'leaving';
           customer.facing = -1;
-          customer.root.setScale(-1, 1);
+          this.setCustomerCharacterPose(customer, 'walking');
+          customer.root.setScale(customer.characterSprite ? 1 : -1, 1);
           customer.eatingPlate.setVisible(false);
           // 付钱瞬间：金币特效 + 桌上留下脏盘
           if (!customer.paidBurstFired && customer.paidAmount > 0) {
@@ -1931,11 +2102,17 @@ export class RestaurantService {
     this.refreshStationCount(wantSlotIndex);
     this.refreshMenuBadge(wantSlotIndex);
 
-    const templateIndex = Phaser.Math.Between(0, CUSTOMER_TEMPLATES.length - 1);
+    const templateIndex = this.spawnedCustomerCount === 0
+      ? 0
+      : Phaser.Math.Between(1, CUSTOMER_TEMPLATES.length - 1);
+    this.spawnedCustomerCount += 1;
     const template = CUSTOMER_TEMPLATES[templateIndex];
 
-    const root = this.scene.add.container(DOOR_X + 20, CUSTOMER_Y);
-    root.setScale(-1, 1);
+    const root = this.scene.add.container(
+      DOOR_X + 20,
+      templateIndex === 0 ? CUSTOMER_ENTRY_Y : CUSTOMER_Y,
+    );
+    root.setScale(templateIndex === 0 ? 1 : -1, 1);
     // 把身体各部件挂到一个 bodyRoot 上，方便"生气抖动"独立于气泡做位移。
     const bodyRoot = this.scene.add.container(0, 0);
     const shoulders = this.scene.add.rectangle(0, -6, 40, 10, template.body).setStrokeStyle(1, 0x1a1a1a, 0.6);
@@ -1944,11 +2121,42 @@ export class RestaurantService {
     const hair = this.scene.add.arc(0, -25, 14, 180, 360, false, template.hair).setClosePath(false);
     hair.setStrokeStyle(0);
     const hairCap = this.scene.add.arc(0, -22, 14, 180, 360, true, template.hair);
+    const usesYoungWomanArt = templateIndex === 0;
+    shoulders.setVisible(!usesYoungWomanArt);
+    body.setVisible(!usesYoungWomanArt);
+    head.setVisible(!usesYoungWomanArt);
+    hair.setVisible(!usesYoungWomanArt);
+    hairCap.setVisible(!usesYoungWomanArt);
     bodyRoot.add([shoulders, body, head, hair, hairCap]);
+    const characterSprite = usesYoungWomanArt
+      ? this.scene.add.sprite(
+        CHARACTER_LAYOUT.youngWomanWalk.offsetX,
+        CHARACTER_LAYOUT.youngWomanWalk.offsetY,
+        'restaurant-customer-young-woman-walk',
+      )
+        .setOrigin(0.5, 1)
+        .setDisplaySize(
+          CHARACTER_LAYOUT.youngWomanWalk.width,
+          CHARACTER_LAYOUT.youngWomanWalk.height,
+        )
+      : undefined;
+    if (characterSprite) {
+      characterSprite.setFlipX(true);
+      characterSprite.play('restaurant-customer-young-woman-walk');
+      bodyRoot.add(characterSprite);
+    }
     root.add(bodyRoot);
 
     // 头顶气泡
     const bubbleRoot = this.scene.add.container(0, BUBBLE_Y_OFFSET);
+    if (usesYoungWomanArt) {
+      bubbleRoot.setPosition(
+        CHARACTER_LAYOUT.youngWomanSeated.offsetX,
+        CHARACTER_LAYOUT.youngWomanSeated.offsetY
+          - CHARACTER_LAYOUT.youngWomanSeated.height
+          - 48,
+      );
+    }
     const bubbleBg = this.scene.add.rectangle(0, 0, 76, 52, 0xf5f0e8).setStrokeStyle(2, 0x2a2a2a);
     const bubbleFill = this.scene.add.rectangle(-28, 18, 56, 6, 0x7db58b, 0.95).setOrigin(0, 0.5);
     const bubbleIcon = this.scene.add.arc(0, -4, 16, 0, 360, false, wantDish.color).setStrokeStyle(1.5, 0xffffff, 0.75);
@@ -1960,11 +2168,22 @@ export class RestaurantService {
 
     // 情绪 emote：气泡上方浮一个 "?" / "!!"，随耐心切换
     const emoteText = this.text(0, BUBBLE_Y_OFFSET - 34, '', 22, '#f2c14c').setOrigin(0.5).setVisible(false);
+    if (usesYoungWomanArt) {
+      emoteText.setPosition(
+        CHARACTER_LAYOUT.youngWomanSeated.offsetX,
+        CHARACTER_LAYOUT.youngWomanSeated.offsetY
+          - CHARACTER_LAYOUT.youngWomanSeated.height
+          - 82,
+      );
+    }
     emoteText.setStroke('#2a1a10', 4);
     root.add(emoteText);
 
     // 吃饭时前面出现的小寿司图标：吃完前从 α=0.9 缩小并淡到 α=0
     const eatingPlate = this.scene.add.container(0, 6).setVisible(false);
+    if (usesYoungWomanArt) {
+      eatingPlate.setPosition(CHARACTER_LAYOUT.youngWomanSeated.offsetX, -62);
+    }
     const eatingDisc = this.scene.add.arc(0, 0, 12, 0, 360, false, 0xf1ece1).setStrokeStyle(1.5, 0xffffff, 0.7);
     const eatingRice = this.scene.add.rectangle(0, 1, 14, 6, 0xfaf4e6).setStrokeStyle(1, 0xd8cfb4, 0.9);
     const eatingTopper = this.scene.add.arc(0, -2, 8, 0, 360, false, wantDish.color).setStrokeStyle(1, 0xffffff, 0.6);
@@ -1999,6 +2218,7 @@ export class RestaurantService {
       bubbleTail: tail,
       emote: emoteText,
       bodyRoot,
+      characterSprite,
       eatingPlate,
       eatingRice,
       eatingTopper,
@@ -2011,6 +2231,43 @@ export class RestaurantService {
     this.guestsRemaining -= 1;
   }
 
+  private setCustomerCharacterPose(customer: Customer, pose: 'walking' | 'seated') {
+    const sprite = customer.characterSprite;
+    if (!sprite) return;
+    if (pose === 'walking') {
+      sprite.setTexture('restaurant-customer-young-woman-walk');
+      sprite.setFlipX(customer.state === 'entering');
+      sprite
+        .setPosition(
+          CHARACTER_LAYOUT.youngWomanWalk.offsetX,
+          CHARACTER_LAYOUT.youngWomanWalk.offsetY,
+        )
+        .setDisplaySize(
+          CHARACTER_LAYOUT.youngWomanWalk.width,
+          CHARACTER_LAYOUT.youngWomanWalk.height,
+        );
+      if (
+        !sprite.anims.isPlaying
+        || sprite.anims.currentAnim?.key !== 'restaurant-customer-young-woman-walk'
+      ) {
+        sprite.play('restaurant-customer-young-woman-walk');
+      }
+      return;
+    }
+    if (sprite.anims.isPlaying) sprite.anims.stop();
+    sprite
+      .setTexture('restaurant-customer-young-woman-seated')
+      .setFlipX(false)
+      .setPosition(
+        CHARACTER_LAYOUT.youngWomanSeated.offsetX,
+        CHARACTER_LAYOUT.youngWomanSeated.offsetY,
+      )
+      .setDisplaySize(
+        CHARACTER_LAYOUT.youngWomanSeated.width,
+        CHARACTER_LAYOUT.youngWomanSeated.height,
+      );
+  }
+
   private customerLeavesUnserved(customer: Customer) {
     this.lost += 1;
     this.reputationDelta -= 1;
@@ -2018,7 +2275,8 @@ export class RestaurantService {
     this.satisfactionCount += 1;
     customer.state = 'leaving';
     customer.facing = -1;
-    customer.root.setScale(-1, 1);
+    this.setCustomerCharacterPose(customer, 'walking');
+    customer.root.setScale(customer.characterSprite ? 1 : -1, 1);
     customer.bubble.setVisible(false);
     customer.emote.setVisible(false);
     customer.bodyRoot.setPosition(0, 0);
@@ -2043,10 +2301,10 @@ export class RestaurantService {
     if (this.chef.heldSlotIndex >= 0) {
       const target = this.findNearestServableCustomer();
       if (target) {
-        this.showPrompt(`空格 · 上菜给${target.displayName}`, this.chef.x, CHEF_Y - 96);
+        this.showPrompt(`空格 · 上菜给${target.displayName}`, this.chef.x, CHEF_PROMPT_Y);
         return;
       }
-      this.showPrompt('空格 · 放回盘子', this.chef.x, CHEF_Y - 96);
+      this.showPrompt('空格 · 放回盘子', this.chef.x, CHEF_PROMPT_Y);
       return;
     }
     const teaCustomer = this.findNearestTeaCustomer();
@@ -2056,18 +2314,18 @@ export class RestaurantService {
     // 倒茶优先级最高（顾客点了茶就等着）
     if (teaCustomer) {
       const suffix = dirty ? '　·　左/右键交替 收盘' : '';
-      this.showPrompt(`按住空格 · 给${teaCustomer.displayName}倒绿茶${suffix}`, this.chef.x, CHEF_Y - 96);
+      this.showPrompt(`按住空格 · 给${teaCustomer.displayName}倒绿茶${suffix}`, this.chef.x, CHEF_PROMPT_Y);
       return;
     }
     // 拿盘和收盘互不冲突：两者同时在范围内时，两个提示合并显示。
     if (stationIndex >= 0) {
       const dish = this.dishes[stationIndex];
       const suffix = dirty ? '　·　左/右键交替 收盘' : '';
-      this.showPrompt(`空格 · 拿一份${dish.dishName}${suffix}`, this.chef.x, CHEF_Y - 96);
+      this.showPrompt(`空格 · 拿一份${dish.dishName}${suffix}`, this.chef.x, CHEF_PROMPT_Y);
       return;
     }
     if (dirty) {
-      this.showPrompt('左/右键交替 · 收盘', this.chef.x, CHEF_Y - 96);
+      this.showPrompt('左/右键交替 · 收盘', this.chef.x, CHEF_PROMPT_Y);
       return;
     }
     this.interactPrompt.setVisible(false);
@@ -2371,7 +2629,7 @@ export class RestaurantService {
     const tail = this.scene.add.triangle(0, 22, -8, 0, 8, 0, 0, 12, 0xf5f0e8).setStrokeStyle(2, 0x2a2a2a);
     const heart = this.text(-72, 0, '♥', 24, '#d96862').setOrigin(0.5);
     const label = this.text(6, 0, reaction, 17, '#2a2a2a').setOrigin(0.5);
-    const container = this.scene.add.container(customer.root.x, customer.root.y - 82, [tail, bg, heart, label]);
+    const container = this.scene.add.container(customer.seatX, customer.root.y - 82, [tail, bg, heart, label]);
     this.shiftLayer.add(container);
     this.scene.tweens.add({
       targets: container,
@@ -2653,7 +2911,8 @@ export class RestaurantService {
           this.stopEmoteTracking(c);
           c.state = 'leaving';
           c.facing = -1;
-          c.root.setScale(-1, 1);
+          this.setCustomerCharacterPose(c, 'walking');
+          c.root.setScale(c.characterSprite ? 1 : -1, 1);
           c.bubble.setVisible(false);
           c.emote.setVisible(false);
           c.bodyRoot.setPosition(0, 0);

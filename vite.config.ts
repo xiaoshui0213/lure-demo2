@@ -16,6 +16,7 @@ export default defineConfig({
         editor: resolve(__dirname, 'editor.html'),
         fishingDemo: resolve(__dirname, 'fishing-demo.html'),
         fishingSceneEditor: resolve(__dirname, 'fishing-scene-editor.html'),
+        restaurantCharacterEditor: resolve(__dirname, 'restaurant-character-editor.html'),
       },
     },
   },

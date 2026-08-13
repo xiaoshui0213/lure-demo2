@@ -5,7 +5,6 @@ import {
 } from '../fishing-scene/customAssets';
 import {
   cloneDefaultFishingLayout,
-  DEFAULT_FISHING_PLAYER_LAYOUT,
   DEFAULT_WATER_FLOW,
   loadFishingSceneLayout,
   saveFishingSceneLayout,
@@ -22,10 +21,16 @@ import {
   isIslandLayer,
   setIslandFoamFromWorldY,
 } from '../fishing-scene/islandFoam';
+import {
+  FISHING_MAPS,
+  getFishingMapIdFromLocation,
+} from '../fishing-scene/maps';
 
 const VIEW_W = 1280;
 const VIEW_H = 720;
 const BOAT_VERTICAL_SHIFT = 0;
+const EDITOR_MAP_ID = getFishingMapIdFromLocation() ?? 'fishing-map-01';
+const EDITOR_MAP = FISHING_MAPS[EDITOR_MAP_ID];
 let customAssetUrls = new Map<string, string>();
 const PLAYER_LAYER_IDS = ['player-boat', 'player-fisher', 'player-rod'] as const;
 type PlayerLayerId = typeof PLAYER_LAYER_IDS[number];
@@ -59,7 +64,7 @@ function byId<T extends HTMLElement>(id: string) {
 }
 
 class FishingSceneEditor extends Phaser.Scene {
-  private layout: FishingSceneLayout = loadFishingSceneLayout();
+  private layout: FishingSceneLayout = loadFishingSceneLayout(EDITOR_MAP_ID);
   private sprites = new Map<string, Phaser.GameObjects.Image>();
   private selectedId = 'far';
   private copiedLayer?: FishingLayerLayout;
@@ -71,25 +76,27 @@ class FishingSceneEditor extends Phaser.Scene {
   private waterFlowPreview?: Phaser.GameObjects.TileSprite;
   private waterFlowTime = 0;
   private boatPreview!: Phaser.GameObjects.Image;
+  private characterGlowPreview!: Phaser.GameObjects.Image;
   private fisherPreview!: Phaser.GameObjects.Image;
   private rodPreview!: Phaser.GameObjects.Graphics;
   private rodHitZone!: Phaser.GameObjects.Zone;
+  private routeScrollX = 0;
 
   constructor() {
     super('FishingSceneEditor');
   }
 
   preload() {
-    this.load.image('scene-sky', '/fishing/replacement-v2/sky-base.png');
-    this.load.image('scene-far', '/fishing/replacement-v2/far-mountains.png');
-    this.load.image('scene-middle', '/fishing/replacement-v2/middle-mountains.png');
-    this.load.image('scene-forest', '/fishing/replacement-v2/middle-forest.png');
-    this.load.image('scene-island-small', '/fishing/replacement-v2/island-small.png');
-    this.load.image('scene-island-forest', '/fishing/replacement-v2/island-large.png');
-    this.load.image('scene-island-rocky', '/fishing/replacement-v2/island-rocky.png');
-    this.load.image('scene-water', '/fishing/replacement-v2/water-surface-02.png');
-    this.load.image('scene-underwater', '/fishing/replacement-v2/underwater-background-day.jpeg');
-    this.load.image('player-boat', '/fishing/replacement-v2/boat-fisher-reflection.png');
+    this.load.image('scene-sky', EDITOR_MAP.assets.sky);
+    this.load.image('scene-far', EDITOR_MAP.assets.far);
+    this.load.image('scene-middle', EDITOR_MAP.assets.middle);
+    this.load.image('scene-forest', EDITOR_MAP.assets.forest);
+    this.load.image('scene-island-small', EDITOR_MAP.assets.islandSmall);
+    this.load.image('scene-island-forest', EDITOR_MAP.assets.islandForest);
+    this.load.image('scene-island-rocky', EDITOR_MAP.assets.islandRocky);
+    this.load.image('scene-water', EDITOR_MAP.assets.water);
+    this.load.image('scene-underwater', EDITOR_MAP.assets.underwater);
+    this.load.image('player-boat', EDITOR_MAP.assets.boat);
     this.load.image('player-fisher', '/fishing/fisher.png');
     for (const layer of this.layout.copies) {
       if (!layer.assetId) continue;
@@ -99,12 +106,13 @@ class FishingSceneEditor extends Phaser.Scene {
   }
 
   create() {
+    this.cameras.main.setBounds(0, 0, VIEW_W + 3000, VIEW_H);
     this.registerWaterFrame();
     this.registerSeamlessWaterTexture();
     for (const layer of this.getAllLayers()) this.createLayerSprite(layer);
     this.createPlayerPreviews();
 
-    this.waterlineGuide = this.add.graphics().setDepth(1000);
+    this.waterlineGuide = this.add.graphics().setDepth(1000).setScrollFactor(0, 1);
     this.foamPreview = this.add.graphics().setDepth(998);
     this.foamHandle = this.add.zone(0, 0, 120, 16)
       .setDepth(999)
@@ -135,16 +143,16 @@ class FishingSceneEditor extends Phaser.Scene {
   private registerWaterFrame() {
     const texture = this.textures.get('scene-water');
     const source = texture.getSourceImage() as HTMLImageElement;
-    const y = Math.round(source.height * 0.533);
-    const height = Math.round(source.height * 0.31);
+    const y = Math.round(source.height * EDITOR_MAP.waterBand.startRatio);
+    const height = Math.round(source.height * EDITOR_MAP.waterBand.heightRatio);
     if (!texture.has('usable-band')) texture.add('usable-band', 0, 0, y, source.width, height);
   }
 
   private registerSeamlessWaterTexture() {
     if (this.textures.exists('scene-water-editor-seamless')) return;
     const source = this.textures.get('scene-water').getSourceImage() as HTMLImageElement;
-    const bandY = Math.round(source.height * 0.533);
-    const bandHeight = Math.round(source.height * 0.31);
+    const bandY = Math.round(source.height * EDITOR_MAP.waterBand.startRatio);
+    const bandHeight = Math.round(source.height * EDITOR_MAP.waterBand.heightRatio);
     const texture = this.textures.createCanvas(
       'scene-water-editor-seamless',
       source.width * 2,
@@ -173,6 +181,7 @@ class FishingSceneEditor extends Phaser.Scene {
     const frame = layer.sourceId === 'water' ? 'usable-band' : undefined;
     const sprite = this.add.image(layer.x, layer.y, layer.textureKey, frame)
       .setData('layerId', layer.id)
+      .setScrollFactor(this.getEditorScrollFactor(layer), 1)
       .setInteractive({ pixelPerfect: true, alphaTolerance: 2, useHandCursor: true });
     if (layer.sourceId === 'water' || layer.sourceId === 'underwater') sprite.setOrigin(0.5, 0);
     this.input.setDraggable(sprite);
@@ -181,7 +190,8 @@ class FishingSceneEditor extends Phaser.Scene {
     if (layer.id === 'water') {
       this.waterFlowPreview?.destroy();
       this.waterFlowPreview = this.add.tileSprite(layer.x, layer.y, 1, 1, 'scene-water-editor-seamless')
-        .setOrigin(0.5, 0);
+        .setOrigin(0.5, 0)
+        .setScrollFactor(0, 1);
     }
     this.applyLayer(layer);
   }
@@ -191,6 +201,7 @@ class FishingSceneEditor extends Phaser.Scene {
     if (!sprite) return;
     sprite
       .setPosition(layer.x, layer.y)
+      .setScrollFactor(this.getEditorScrollFactor(layer), 1)
       .setAlpha(layer.alpha)
       .setDepth(layer.depth)
       .setVisible(layer.visible);
@@ -201,7 +212,7 @@ class FishingSceneEditor extends Phaser.Scene {
       const displayWidth = layer.width * layer.stretchX;
       const displayHeight = naturalHeight * layer.stretchY;
       const source = this.textures.get(layer.textureKey).getSourceImage() as HTMLImageElement;
-      const bandHeight = Math.round(source.height * 0.31);
+      const bandHeight = Math.round(source.height * EDITOR_MAP.waterBand.heightRatio);
       this.waterFlowPreview
         .setPosition(layer.x, layer.y)
         .setSize(displayWidth, displayHeight)
@@ -217,6 +228,11 @@ class FishingSceneEditor extends Phaser.Scene {
 
   private getPlayerSurfaceY() {
     return this.layout.waterlineY + BOAT_VERTICAL_SHIFT;
+  }
+
+  private getEditorScrollFactor(layer: FishingLayerLayout) {
+    const isBaseBackdrop = layer.id === layer.sourceId && !isIslandLayer(layer);
+    return isBaseBackdrop ? 0 : layer.parallax;
   }
 
   private getBoatPosition() {
@@ -255,12 +271,14 @@ class FishingSceneEditor extends Phaser.Scene {
       'foam-visible', 'foam-waterline-y', 'foam-y-offset', 'foam-half-width',
       'water-flow-speed-x', 'water-flow-variation',
       'water-flow-vertical-amount', 'water-flow-vertical-speed',
+      'glow-offset-x', 'glow-offset-y', 'glow-scale-x', 'glow-scale-y',
+      'glow-radius', 'glow-strength', 'glow-alpha',
     ];
     for (const id of ids) {
       const element = document.getElementById(id) as HTMLInputElement | null;
       if (element) element.disabled = locked;
     }
-    for (const id of ['scale-down', 'scale-reset', 'scale-up', 'stretch-reset']) {
+    for (const id of ['scale-down', 'scale-reset', 'scale-up', 'stretch-reset', 'glow-reset']) {
       const button = document.getElementById(id) as HTMLButtonElement | null;
       if (button) button.disabled = locked;
     }
@@ -311,15 +329,23 @@ class FishingSceneEditor extends Phaser.Scene {
   }
 
   private createPlayerPreviews() {
+    this.createCharacterGlowPreviewTexture();
+    this.characterGlowPreview = this.add.image(0, 0, 'editor-character-glow-mask')
+      .setTint(0x57e6dc)
+      .setBlendMode(Phaser.BlendModes.ADD)
+      .setScrollFactor(0, 1);
     this.boatPreview = this.add.image(0, 0, 'player-boat')
       .setData('layerId', 'player-boat')
+      .setScrollFactor(0, 1)
       .setInteractive({ useHandCursor: true });
     this.fisherPreview = this.add.image(0, 0, 'player-fisher')
       .setData('layerId', 'player-fisher')
+      .setScrollFactor(0, 1)
       .setInteractive({ useHandCursor: true });
-    this.rodPreview = this.add.graphics();
+    this.rodPreview = this.add.graphics().setScrollFactor(0, 1);
     this.rodHitZone = this.add.zone(0, 0, 96, 96)
       .setData('layerId', 'player-rod')
+      .setScrollFactor(0, 1)
       .setInteractive({ useHandCursor: true });
 
     for (const target of [this.boatPreview, this.fisherPreview, this.rodHitZone]) {
@@ -328,6 +354,37 @@ class FishingSceneEditor extends Phaser.Scene {
     }
 
     this.applyPlayerLayers();
+  }
+
+  private createCharacterGlowPreviewTexture() {
+    const key = 'editor-character-glow-mask';
+    if (this.textures.exists(key)) return;
+    const source = this.textures.get('player-boat').getSourceImage() as HTMLImageElement;
+    const texture = this.textures.createCanvas(key, source.width, source.height);
+    if (!texture) return;
+    const ctx = texture.context;
+    const sx = source.width / 1024;
+    const sy = source.height / 576;
+    ctx.beginPath();
+    ctx.moveTo(474 * sx, 5 * sy);
+    ctx.bezierCurveTo(438 * sx, 5 * sy, 418 * sx, 27 * sy, 423 * sx, 58 * sy);
+    ctx.bezierCurveTo(421 * sx, 84 * sy, 436 * sx, 102 * sy, 454 * sx, 109 * sy);
+    ctx.lineTo(438 * sx, 120 * sy);
+    ctx.bezierCurveTo(401 * sx, 126 * sy, 366 * sx, 151 * sy, 338 * sx, 184 * sy);
+    ctx.lineTo(291 * sx, 221 * sy);
+    ctx.lineTo(581 * sx, 239 * sy);
+    ctx.bezierCurveTo(592 * sx, 211 * sy, 589 * sx, 177 * sy, 565 * sx, 149 * sy);
+    ctx.bezierCurveTo(552 * sx, 134 * sy, 532 * sx, 124 * sy, 511 * sx, 118 * sy);
+    ctx.lineTo(501 * sx, 107 * sy);
+    ctx.bezierCurveTo(527 * sx, 95 * sy, 537 * sx, 74 * sy, 531 * sx, 48 * sy);
+    ctx.bezierCurveTo(528 * sx, 20 * sy, 505 * sx, 5 * sy, 474 * sx, 5 * sy);
+    ctx.closePath();
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = 5 * Math.max(sx, sy);
+    ctx.lineJoin = 'round';
+    ctx.lineCap = 'round';
+    ctx.stroke();
+    texture.refresh();
   }
 
   private applyPlayerLayers() {
@@ -341,6 +398,20 @@ class FishingSceneEditor extends Phaser.Scene {
       .setDisplaySize(player.boat.width, player.boat.width * boatRatio)
       .setDepth(player.boat.depth)
       .setVisible(player.boat.visible);
+
+    const glow = player.glow;
+    this.characterGlowPreview
+      .setPosition(boatPos.x + glow.offsetX, boatPos.y + glow.offsetY)
+      .setOrigin(0.5, 0.497)
+      .setDisplaySize(
+        player.boat.width * glow.scaleX,
+        player.boat.width * boatRatio * glow.scaleY,
+      )
+      .setDepth(player.boat.depth - 0.1)
+      .setAlpha(glow.alpha)
+      .setVisible(EDITOR_MAP_ID === 'fishing-map-02' && player.boat.visible);
+    this.characterGlowPreview.preFX?.clear();
+    this.characterGlowPreview.preFX?.addGlow(0x57e6dc, glow.strength, 0.18, true, 0.13, glow.radius);
 
     const fisherSource = this.textures.get('player-fisher').getSourceImage() as HTMLImageElement;
     const fisherRatio = fisherSource.width / fisherSource.height;
@@ -365,7 +436,7 @@ class FishingSceneEditor extends Phaser.Scene {
     const tipX = grip.x + Math.cos(rod.restAngle) * rod.length;
     const tipY = grip.y + Math.sin(rod.restAngle) * rod.length;
     const segmentCount = 8;
-    this.rodPreview.lineStyle(3, 0x5a4030, 1);
+    const points: Phaser.Math.Vector2[] = [];
     for (let i = 0; i < segmentCount; i += 1) {
       const t0 = i / segmentCount;
       const t1 = (i + 1) / segmentCount;
@@ -373,10 +444,21 @@ class FishingSceneEditor extends Phaser.Scene {
       const y0 = Phaser.Math.Linear(grip.y, tipY, t0);
       const x1 = Phaser.Math.Linear(grip.x, tipX, t1);
       const y1 = Phaser.Math.Linear(grip.y, tipY, t1);
+      points.push(new Phaser.Math.Vector2(x0, y0));
+      this.rodPreview.lineStyle(
+        EDITOR_MAP_ID === 'fishing-map-02' ? Phaser.Math.Linear(4.8, 1.2, t0) : 3,
+        EDITOR_MAP_ID === 'fishing-map-02' ? 0x526f7f : 0x5a4030,
+        1,
+      );
       this.rodPreview.lineBetween(x0, y0, x1, y1);
     }
-    this.rodPreview.fillStyle(0xc8a066, 1);
-    this.rodPreview.fillCircle(grip.x, grip.y, 4);
+    if (EDITOR_MAP_ID === 'fishing-map-02' && points.length > 1) {
+      this.rodPreview.lineStyle(7, 0x263846, 1);
+      this.rodPreview.lineBetween(points[0].x, points[0].y, points[1].x, points[1].y);
+    } else {
+      this.rodPreview.fillStyle(0xc8a066, 1);
+      this.rodPreview.fillCircle(grip.x, grip.y, 4);
+    }
   }
 
   private handlePlayerDrag(id: PlayerLayerId, dragX: number, dragY: number) {
@@ -465,7 +547,7 @@ class FishingSceneEditor extends Phaser.Scene {
   }
 
   private getPlayerUniformScale() {
-    const defaults = DEFAULT_FISHING_PLAYER_LAYOUT;
+    const defaults = cloneDefaultFishingLayout(EDITOR_MAP_ID).player;
     const player = this.layout.player;
     if (this.selectedId === 'player-boat') return player.boat.width / defaults.boat.width;
     if (this.selectedId === 'player-fisher') return player.fisher.height / defaults.fisher.height;
@@ -475,7 +557,7 @@ class FishingSceneEditor extends Phaser.Scene {
 
   private setPlayerUniformScale(rawScale: number) {
     const scale = Phaser.Math.Clamp(rawScale, 0.2, 3);
-    const defaults = DEFAULT_FISHING_PLAYER_LAYOUT;
+    const defaults = cloneDefaultFishingLayout(EDITOR_MAP_ID).player;
     const player = this.layout.player;
     if (this.selectedId === 'player-boat') player.boat.width = Math.round(defaults.boat.width * scale);
     else if (this.selectedId === 'player-fisher') player.fisher.height = Math.round(defaults.fisher.height * scale);
@@ -486,7 +568,7 @@ class FishingSceneEditor extends Phaser.Scene {
   }
 
   private resetPlayerScale() {
-    const defaults = DEFAULT_FISHING_PLAYER_LAYOUT;
+    const defaults = cloneDefaultFishingLayout(EDITOR_MAP_ID).player;
     const player = this.layout.player;
     if (this.selectedId === 'player-boat') player.boat.width = defaults.boat.width;
     else if (this.selectedId === 'player-fisher') player.fisher.height = defaults.fisher.height;
@@ -566,12 +648,14 @@ class FishingSceneEditor extends Phaser.Scene {
     const waterY = getIslandFoamWorldY(sprite, foam);
     const halfWidth = getIslandFoamHalfWidth(sprite, foam);
     this.foamHandle
+      .setScrollFactor(this.getEditorScrollFactor(layer), 1)
       .setPosition(layer.x, waterY)
       .setSize(Math.max(40, halfWidth * 2), 16)
       .setVisible(true);
   }
 
   private drawIslandFoamPreview(layer: FishingLayerLayout, sprite: Phaser.GameObjects.Image) {
+    this.foamPreview.setScrollFactor(this.getEditorScrollFactor(layer), 1);
     const foam = getIslandFoam(layer);
     if (!foam.visible) return;
     const centerX = layer.x;
@@ -608,8 +692,22 @@ class FishingSceneEditor extends Phaser.Scene {
   private refreshBoatFoamForm() {
     const boat = this.layout.player.boat;
     byId<HTMLInputElement>('boat-foam-y-offset').value = String(Math.round(boat.foamYOffset ?? 0));
-    byId<HTMLInputElement>('boat-foam-half-width').value = String(Math.round(boat.foamHalfWidth ?? 130));
-    byId<HTMLOutputElement>('boat-foam-half-width-value').value = `${Math.round(boat.foamHalfWidth ?? 130)}px`;
+    byId<HTMLInputElement>('boat-foam-half-width').value = String(Math.round(boat.foamHalfWidth ?? 105));
+    byId<HTMLOutputElement>('boat-foam-half-width-value').value = `${Math.round(boat.foamHalfWidth ?? 105)}px`;
+  }
+
+  private refreshCharacterGlowForm() {
+    const glow = this.layout.player.glow;
+    byId<HTMLInputElement>('glow-offset-x').value = String(Math.round(glow.offsetX));
+    byId<HTMLInputElement>('glow-offset-y').value = String(Math.round(glow.offsetY));
+    byId<HTMLInputElement>('glow-scale-x').value = String(glow.scaleX);
+    byId<HTMLInputElement>('glow-scale-y').value = String(glow.scaleY);
+    byId<HTMLOutputElement>('glow-scale-x-value').value = `${Math.round(glow.scaleX * 100)}%`;
+    byId<HTMLOutputElement>('glow-scale-y-value').value = `${Math.round(glow.scaleY * 100)}%`;
+    byId<HTMLInputElement>('glow-radius').value = String(glow.radius);
+    byId<HTMLInputElement>('glow-strength').value = String(glow.strength);
+    byId<HTMLInputElement>('glow-alpha').value = String(glow.alpha);
+    byId<HTMLOutputElement>('glow-alpha-value').value = `${Math.round(glow.alpha * 100)}%`;
   }
 
   private refreshWaterFlowForm() {
@@ -622,17 +720,19 @@ class FishingSceneEditor extends Phaser.Scene {
   }
 
   private drawBoatFoamPreview() {
+    this.foamPreview.setScrollFactor(0, 1);
     const boat = this.layout.player.boat;
     const boatPosition = this.getBoatPosition();
     const centerX = boatPosition.x;
     const waterY = boatPosition.y + (boat.foamYOffset ?? 0);
-    const halfWidth = boat.foamHalfWidth ?? 130;
+    const halfWidth = boat.foamHalfWidth ?? 105;
     const time = this.time.now * 0.001;
     drawContinuousFoamRing(this.foamPreview, centerX, halfWidth, waterY, 1.8, 0xd8f2ef, 0.7, 4.2, time);
     drawContinuousFoamRing(this.foamPreview, centerX, halfWidth, waterY, 0, 0xffffff, 0.9, 2.4, time + 0.8);
     this.foamPreview.lineStyle(2, 0xffb347, 0.95);
     this.foamPreview.lineBetween(centerX - halfWidth, waterY, centerX + halfWidth, waterY);
     this.foamHandle
+      .setScrollFactor(0, 1)
       .setPosition(centerX, waterY)
       .setSize(Math.max(40, halfWidth * 2), 18)
       .setVisible(true);
@@ -668,7 +768,8 @@ class FishingSceneEditor extends Phaser.Scene {
         const layer = this.getLayer(id);
         if (!layer || layer.locked) return;
         this.selectedId = id;
-        layer.x = Math.round(dragX);
+        const scrollFactor = this.getEditorScrollFactor(layer);
+        layer.x = Math.round(dragX - this.routeScrollX * (1 - scrollFactor));
         layer.y = Math.round(dragY);
         if (layer.id === 'water') this.layout.waterlineY = layer.y;
         this.applyLayer(layer);
@@ -756,19 +857,24 @@ class FishingSceneEditor extends Phaser.Scene {
         this.textures.addImage(textureKey, image);
         const maxWidth = 640;
         const displayWidth = Math.min(maxWidth, image.naturalWidth);
+        const isFarMountain = /远山|far[-_\s]?mountain|distant[-_\s]?mountain/i.test(file.name);
+        const sourceId: FishingLayerId = isFarMountain ? 'far' : 'islandSmall';
+        const parallax = isFarMountain ? 0 : 0.5;
         const layer: FishingLayerLayout = {
-          ...cloneDefaultFishingLayout().layers.islandSmall,
+          ...cloneDefaultFishingLayout(EDITOR_MAP_ID).layers[sourceId],
           id: `custom-${asset.id}`,
-          sourceId: 'islandSmall',
-          name: file.name.replace(/\.[^.]+$/, ''),
+          sourceId,
+          name: isFarMountain ? '连续远山带' : file.name.replace(/\.[^.]+$/, ''),
           textureKey,
           assetId: asset.id,
-          x: Math.round(dropX + index * 24),
+          x: Math.round(dropX + this.routeScrollX * parallax + index * 24),
           y: Math.round(dropY + index * 24),
           width: displayWidth,
           height: undefined,
-          depth: 12,
-          parallax: 0.5,
+          depth: isFarMountain ? 0 : 12,
+          parallax,
+          repeatMode: isFarMountain ? 'horizontal' : 'single',
+          foam: isFarMountain ? undefined : cloneDefaultFishingLayout(EDITOR_MAP_ID).layers.islandSmall.foam,
         };
         this.layout.copies.push(layer);
         this.createLayerSprite(layer);
@@ -780,7 +886,55 @@ class FishingSceneEditor extends Phaser.Scene {
     }
   }
 
+  private setRouteScroll(value: number) {
+    this.routeScrollX = Phaser.Math.Clamp(Math.round(value), 0, 3000);
+    this.cameras.main.scrollX = this.routeScrollX;
+    const slider = byId<HTMLInputElement>('route-scroll');
+    slider.value = String(this.routeScrollX);
+    byId<HTMLOutputElement>('route-scroll-value').value = this.routeScrollX === 0
+      ? '首屏 · 0m'
+      : `航程 · ${this.routeScrollX}m`;
+    this.drawGuides();
+  }
+
   private bindDom() {
+    byId<HTMLInputElement>('route-scroll').addEventListener('input', (event) => {
+      this.setRouteScroll(Number((event.target as HTMLInputElement).value));
+    });
+    byId<HTMLButtonElement>('route-start').addEventListener('click', () => this.setRouteScroll(0));
+    byId<HTMLButtonElement>('route-back').addEventListener('click', () => {
+      this.setRouteScroll(this.routeScrollX - 500);
+    });
+    byId<HTMLButtonElement>('route-forward').addEventListener('click', () => {
+      this.setRouteScroll(this.routeScrollX + 500);
+    });
+    const bindGlowInput = (
+      id: string,
+      field: keyof FishingSceneLayout['player']['glow'],
+    ) => {
+      byId<HTMLInputElement>(id).addEventListener('input', (event) => {
+        const value = Number((event.target as HTMLInputElement).value);
+        if (!Number.isFinite(value)) return;
+        this.layout.player.glow[field] = value;
+        this.applyPlayerLayers();
+        this.refreshCharacterGlowForm();
+      });
+    };
+    bindGlowInput('glow-offset-x', 'offsetX');
+    bindGlowInput('glow-offset-y', 'offsetY');
+    bindGlowInput('glow-scale-x', 'scaleX');
+    bindGlowInput('glow-scale-y', 'scaleY');
+    bindGlowInput('glow-radius', 'radius');
+    bindGlowInput('glow-strength', 'strength');
+    bindGlowInput('glow-alpha', 'alpha');
+    byId<HTMLButtonElement>('glow-reset').addEventListener('click', () => {
+      this.layout.player.glow = structuredClone(
+        cloneDefaultFishingLayout(EDITOR_MAP_ID).player.glow,
+      );
+      this.applyPlayerLayers();
+      this.refreshCharacterGlowForm();
+    });
+
     window.addEventListener('keydown', (event) => {
       if (event.key === 'Delete' && !(document.activeElement instanceof HTMLInputElement)) {
         event.preventDefault();
@@ -874,7 +1028,7 @@ class FishingSceneEditor extends Phaser.Scene {
         return;
       }
       const layer = this.getSelectedLayer();
-      const base = cloneDefaultFishingLayout().layers[layer.sourceId];
+      const base = cloneDefaultFishingLayout(EDITOR_MAP_ID).layers[layer.sourceId];
       layer.width = base.width;
       layer.height = base.height;
       this.applyLayer(layer);
@@ -973,12 +1127,12 @@ class FishingSceneEditor extends Phaser.Scene {
     byId<HTMLButtonElement>('paste-layer').addEventListener('click', () => this.pasteCopiedLayer());
     byId<HTMLButtonElement>('delete-layer').addEventListener('click', () => this.deleteSelectedLayer());
     byId<HTMLButtonElement>('save').addEventListener('click', () => {
-      saveFishingSceneLayout(this.layout);
-      this.setStatus('已保存。刷新钓鱼Demo即可应用当前构图。');
+      saveFishingSceneLayout(this.layout, EDITOR_MAP_ID);
+      this.setStatus(`已保存到“${EDITOR_MAP.name}”。刷新钓鱼Demo即可应用当前构图。`);
     });
     byId<HTMLButtonElement>('open-game').addEventListener('click', () => {
-      saveFishingSceneLayout(this.layout);
-      window.location.href = '/fishing-demo.html';
+      saveFishingSceneLayout(this.layout, EDITOR_MAP_ID);
+      window.location.href = `/fishing-demo.html?map=${EDITOR_MAP_ID}`;
     });
     byId<HTMLButtonElement>('export').addEventListener('click', () => this.exportJson());
     byId<HTMLButtonElement>('reset').addEventListener('click', () => this.resetLayout());
@@ -1073,6 +1227,9 @@ class FishingSceneEditor extends Phaser.Scene {
   private refreshForm() {
     const isPlayer = isPlayerLayerId(this.selectedId);
     this.setSceneryFieldVisible(!isPlayer);
+    byId<HTMLElement>('character-glow-section').style.display = (
+      EDITOR_MAP_ID === 'fishing-map-02' && this.selectedId === 'player-boat'
+    ) ? '' : 'none';
 
     const labelX = byId<HTMLLabelElement>('label-x');
     const labelY = byId<HTMLLabelElement>('label-y');
@@ -1093,6 +1250,7 @@ class FishingSceneEditor extends Phaser.Scene {
       byId<HTMLInputElement>('depth').value = String(player.boat.depth);
       byId<HTMLInputElement>('scale').value = String(this.getPlayerUniformScale());
       this.refreshBoatFoamForm();
+      this.refreshCharacterGlowForm();
       return;
     }
 
@@ -1170,6 +1328,7 @@ class FishingSceneEditor extends Phaser.Scene {
 
     this.selection.clear();
     if (isPlayerLayerId(this.selectedId)) {
+      this.selection.setScrollFactor(0, 1);
       const bounds = this.getPlayerSelectionBounds();
       if (!bounds) return;
       this.selection.lineStyle(2, 0xf3c56c, 1);
@@ -1179,10 +1338,11 @@ class FishingSceneEditor extends Phaser.Scene {
     }
     const sprite = this.sprites.get(this.selectedId);
     if (!sprite?.visible) return;
+    const layer = this.getSelectedLayer();
+    this.selection.setScrollFactor(this.getEditorScrollFactor(layer), 1);
     const bounds = sprite.getBounds();
     this.selection.lineStyle(2, 0xf3c56c, 1);
     this.selection.strokeRect(bounds.x, bounds.y, bounds.width, bounds.height);
-    const layer = this.getSelectedLayer();
     if (isIslandLayer(layer)) {
       this.drawIslandFoamPreview(layer, sprite);
       this.syncFoamHandle(layer);
@@ -1190,14 +1350,14 @@ class FishingSceneEditor extends Phaser.Scene {
   }
 
   private getUniformScale(layer: FishingLayerLayout) {
-    const baseWidth = cloneDefaultFishingLayout().layers[layer.sourceId].width;
+    const baseWidth = cloneDefaultFishingLayout(EDITOR_MAP_ID).layers[layer.sourceId].width;
     return layer.width / baseWidth;
   }
 
   private setUniformScale(rawScale: number) {
     const scale = Phaser.Math.Clamp(rawScale, 0.2, 3);
     const layer = this.getSelectedLayer();
-    const base = cloneDefaultFishingLayout().layers[layer.sourceId];
+    const base = cloneDefaultFishingLayout(EDITOR_MAP_ID).layers[layer.sourceId];
     const previousScale = this.getUniformScale(layer);
     const ratio = scale / previousScale;
     layer.width = Math.round(base.width * scale);
@@ -1248,7 +1408,9 @@ class FishingSceneEditor extends Phaser.Scene {
     const layer = structuredClone(this.copiedLayer);
     layer.id = `${layer.sourceId}-copy-${Date.now()}-${this.pasteCount}`;
     layer.name = `${this.copiedLayer.name} 副本 ${this.pasteCount}`;
-    layer.x += 24 * this.pasteCount;
+    layer.x = this.routeScrollX > 0
+      ? Math.round(this.routeScrollX * layer.parallax + VIEW_W * 0.65 + 24 * this.pasteCount)
+      : layer.x + 24 * this.pasteCount;
     layer.y += 24 * this.pasteCount;
     this.layout.copies.push(layer);
     this.createLayerSprite(layer);
@@ -1293,7 +1455,7 @@ class FishingSceneEditor extends Phaser.Scene {
 
   private resetLayout() {
     if (!window.confirm('确定恢复默认构图吗？')) return;
-    this.layout = cloneDefaultFishingLayout();
+    this.layout = cloneDefaultFishingLayout(EDITOR_MAP_ID);
     this.rebuildSprites();
     this.selectLayer('player-boat');
     this.setStatus('已恢复默认值，点击“保存并应用”后生效。');
@@ -1304,7 +1466,7 @@ class FishingSceneEditor extends Phaser.Scene {
     const url = URL.createObjectURL(blob);
     const anchor = document.createElement('a');
     anchor.href = url;
-    anchor.download = 'mist-lake-layout.json';
+    anchor.download = `${EDITOR_MAP_ID}-layout.json`;
     anchor.click();
     URL.revokeObjectURL(url);
     this.setStatus('布局JSON已导出。');
@@ -1318,7 +1480,7 @@ class FishingSceneEditor extends Phaser.Scene {
     reader.onload = () => {
       try {
         const imported = JSON.parse(String(reader.result)) as FishingSceneLayout;
-        const merged = cloneDefaultFishingLayout();
+        const merged = cloneDefaultFishingLayout(EDITOR_MAP_ID);
         for (const id of LAYER_ORDER) {
           const base = merged.layers[id];
           const savedLayer = imported.layers?.[id] ?? {};
@@ -1355,6 +1517,7 @@ class FishingSceneEditor extends Phaser.Scene {
           boat: { ...merged.player.boat, ...(imported.player?.boat ?? {}) },
           fisher: { ...merged.player.fisher, ...(imported.player?.fisher ?? {}) },
           rod: { ...merged.player.rod, ...(imported.player?.rod ?? {}) },
+          glow: { ...merged.player.glow, ...(imported.player?.glow ?? {}) },
         };
         this.layout = merged;
         this.rebuildSprites();
@@ -1376,7 +1539,13 @@ class FishingSceneEditor extends Phaser.Scene {
 }
 
 async function startEditor() {
-  const layout = loadFishingSceneLayout();
+  document.title = `LURE · ${EDITOR_MAP.name}场景编辑器`;
+  const title = document.querySelector('aside h1');
+  if (title) title.textContent = `${EDITOR_MAP.name} · 场景分层编辑器`;
+  if (EDITOR_MAP_ID !== 'fishing-map-02') {
+    byId<HTMLElement>('route-editor').style.display = 'none';
+  }
+  const layout = loadFishingSceneLayout(EDITOR_MAP_ID);
   customAssetUrls = await loadSceneAssetUrls(
     layout.copies.flatMap((layer) => layer.assetId ? [layer.assetId] : []),
   );
@@ -1385,7 +1554,7 @@ async function startEditor() {
     parent: 'scene-canvas',
     width: VIEW_W,
     height: VIEW_H,
-    backgroundColor: '#86c8d4',
+    backgroundColor: EDITOR_MAP_ID === 'fishing-map-02' ? '#030819' : '#86c8d4',
     scene: [FishingSceneEditor],
     render: { antialias: true, pixelArt: false },
     scale: { mode: Phaser.Scale.FIT, autoCenter: Phaser.Scale.CENTER_BOTH },

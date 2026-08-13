@@ -8,6 +8,13 @@ declare module 'phaser' {
     rexUI: RexUIPlugin;
   }
 }
+
+declare global {
+  interface Window {
+    openFishingMapSelect?: () => void;
+    selectFishingMap?: (mapId: string) => void;
+  }
+}
 import {
   loadFishingSceneLayout,
   type FishingLayerLayout,
@@ -26,10 +33,18 @@ import {
   type RestaurantServiceResult,
 } from '../fishing-scene/restaurantService';
 import { createRestaurantLightEditor } from '../fishing-scene/restaurantLightEditor';
+import {
+  FISHING_MAPS,
+  getFishingMapIdFromLocation,
+} from '../fishing-scene/maps';
 
 const VIEW_W = 1280;
 const VIEW_H = 720;
-const SAVED_SCENE_LAYOUT = loadFishingSceneLayout();
+const SELECTED_MAP_ID = getFishingMapIdFromLocation();
+const ACTIVE_MAP_ID = SELECTED_MAP_ID ?? 'fishing-map-01';
+const ACTIVE_MAP = FISHING_MAPS[ACTIVE_MAP_ID];
+const SAVED_SCENE_LAYOUT = loadFishingSceneLayout(ACTIVE_MAP_ID);
+const MAP_TRANSFER_STATE_KEY = 'lure:fishing-map-transfer-state:v1';
 let customAssetUrls = new Map<string, string>();
 // 航行初始构图参考 Cast n Chill：水线位于画面下方约三分之一处。
 // 进入钓鱼后再通过相机向下移动展示水下空间。
@@ -145,6 +160,7 @@ class FishingDemoScene extends Phaser.Scene {
   private readonly sceneLayout: FishingSceneLayout = SAVED_SCENE_LAYOUT;
   private mode: DemoMode = 'sailing';
   private boat!: Phaser.GameObjects.Sprite;
+  private characterGlow!: Phaser.GameObjects.Sprite;
   private fisher!: Phaser.GameObjects.Sprite;
   private boatReflection!: Phaser.GameObjects.Sprite;
   private fisherReflection!: Phaser.GameObjects.Sprite;
@@ -313,20 +329,38 @@ class FishingDemoScene extends Phaser.Scene {
   }
 
   preload() {
-    this.load.image('scene-sky', '/fishing/replacement-v2/sky-base.png');
-    this.load.image('scene-far', '/fishing/replacement-v2/far-mountains.png');
-    this.load.image('scene-middle', '/fishing/replacement-v2/middle-mountains.png');
-    this.load.image('scene-forest', '/fishing/replacement-v2/middle-forest.png');
-    this.load.image('scene-island-small', '/fishing/replacement-v2/island-small.png');
-    this.load.image('scene-island-forest', '/fishing/replacement-v2/island-large.png');
-    this.load.image('scene-island-rocky', '/fishing/replacement-v2/island-rocky.png');
-    this.load.image('scene-water', '/fishing/replacement-v2/water-surface-02.png');
-    this.load.image('scene-underwater', '/fishing/replacement-v2/underwater-background-day.jpeg');
+    this.load.image('scene-sky', ACTIVE_MAP.assets.sky);
+    this.load.image('scene-far', ACTIVE_MAP.assets.far);
+    this.load.image('scene-middle', ACTIVE_MAP.assets.middle);
+    this.load.image('scene-forest', ACTIVE_MAP.assets.forest);
+    this.load.image('scene-island-small', ACTIVE_MAP.assets.islandSmall);
+    this.load.image('scene-island-forest', ACTIVE_MAP.assets.islandForest);
+    this.load.image('scene-island-rocky', ACTIVE_MAP.assets.islandRocky);
+    this.load.image('scene-water', ACTIVE_MAP.assets.water);
+    this.load.image('scene-underwater', ACTIVE_MAP.assets.underwater);
     this.load.image('restaurant-background', '/fishing/restaurant-background-new.png');
     this.load.image('shipyard-background', '/fishing/shipyard-background.png');
     this.load.image('faceless-bounty-hunter', '/fishing/faceless-bounty-hunter.png');
-    this.load.image('boat', '/fishing/replacement-v2/boat-fisher-reflection.png');
+    this.load.image('boat', ACTIVE_MAP.assets.boat);
     this.load.image('fisher', '/fishing/fisher.png');
+    this.load.image(
+      'restaurant-player-idle-front',
+      '/fishing/restaurant/characters/player/player-idle-front.png',
+    );
+    this.load.spritesheet(
+      'restaurant-player-walk-right',
+      '/fishing/restaurant/characters/player/player-walk-right.png',
+      { frameWidth: 320, frameHeight: 600 },
+    );
+    this.load.image(
+      'restaurant-customer-young-woman-seated',
+      '/fishing/restaurant/characters/customers/young-woman/young-woman-seated-back.png',
+    );
+    this.load.spritesheet(
+      'restaurant-customer-young-woman-walk',
+      '/fishing/restaurant/characters/customers/young-woman/young-woman-walk-right.png',
+      { frameWidth: 420, frameHeight: 720 },
+    );
     for (const layer of this.sceneLayout.copies) {
       if (!layer.assetId) continue;
       const url = customAssetUrls.get(layer.assetId);
@@ -335,7 +369,10 @@ class FishingDemoScene extends Phaser.Scene {
   }
 
   create() {
+    this.restoreMapTransferState();
+    this.installMapSelectionBridge();
     this.createPlaceholderTextures();
+    this.createRestaurantCharacterAnimations();
     this.createSeamlessUnderwaterTexture();
     this.createSeamlessWaterTexture();
     this.createWorld();
@@ -364,10 +401,115 @@ class FishingDemoScene extends Phaser.Scene {
     this.createInput();
 
     this.cameras.main.setBounds(0, 0, WORLD_WIDTH, WORLD_BOTTOM);
-    this.cameras.main.setBackgroundColor('#86c8d4');
+    this.cameras.main.setBackgroundColor(
+      ACTIVE_MAP_ID === 'fishing-map-02' ? '#030819' : '#86c8d4',
+    );
     this.cameras.main.scrollX = SAIL_START_X - PLAYER_SCREEN_X;
     this.cameras.main.scrollY = 0;
     this.updateHud();
+  }
+
+  private createRestaurantCharacterAnimations() {
+    if (!this.anims.exists('restaurant-player-walk')) {
+      this.anims.create({
+        key: 'restaurant-player-walk',
+        frames: this.anims.generateFrameNumbers('restaurant-player-walk-right', {
+          start: 0,
+          end: 3,
+        }),
+        frameRate: 8,
+        repeat: -1,
+      });
+    }
+    if (!this.anims.exists('restaurant-customer-young-woman-walk')) {
+      this.anims.create({
+        key: 'restaurant-customer-young-woman-walk',
+        frames: this.anims.generateFrameNumbers('restaurant-customer-young-woman-walk', {
+          start: 0,
+          end: 3,
+        }),
+        frameRate: 8,
+        repeat: -1,
+      });
+    }
+  }
+
+  private installMapSelectionBridge() {
+    window.selectFishingMap = (mapId: string) => {
+      if (mapId !== 'fishing-map-01' && mapId !== 'fishing-map-02') return;
+      const transferState = {
+        cargoCount: this.cargoCount,
+        cargoValue: this.cargoValue,
+        inventory: this.inventory,
+        coins: this.coins,
+        preparedServings: this.preparedServings,
+        preparedRevenue: this.preparedRevenue,
+        reputation: this.reputation,
+        lastServiceMessage: this.lastServiceMessage,
+        lastShipyardMessage: this.lastShipyardMessage,
+        secretQuest: this.secretQuest,
+        secretFishCaught: this.secretFishCaught,
+        boatHp: this.boatHp,
+        nightThreat: this.nightThreat,
+        hullLevel: this.hullLevel,
+        rodLevel: this.rodLevel,
+        lastCatch: this.lastCatch,
+      };
+      window.sessionStorage.setItem(MAP_TRANSFER_STATE_KEY, JSON.stringify(transferState));
+      const nextUrl = new URL(window.location.href);
+      nextUrl.searchParams.set('map', mapId);
+      window.location.href = nextUrl.toString();
+    };
+  }
+
+  private restoreMapTransferState() {
+    const raw = window.sessionStorage.getItem(MAP_TRANSFER_STATE_KEY);
+    if (!raw) return;
+    window.sessionStorage.removeItem(MAP_TRANSFER_STATE_KEY);
+    try {
+      const saved = JSON.parse(raw) as Partial<{
+        cargoCount: number;
+        cargoValue: number;
+        inventory: InventoryItem[];
+        coins: number;
+        preparedServings: number;
+        preparedRevenue: number;
+        reputation: number;
+        lastServiceMessage: string;
+        lastShipyardMessage: string;
+        secretQuest: 'available' | 'accepted' | 'completed';
+        secretFishCaught: boolean;
+        boatHp: number;
+        nightThreat: number;
+        hullLevel: number;
+        rodLevel: number;
+        lastCatch: string;
+      }>;
+      if (typeof saved.cargoCount === 'number') this.cargoCount = saved.cargoCount;
+      if (typeof saved.cargoValue === 'number') this.cargoValue = saved.cargoValue;
+      if (Array.isArray(saved.inventory)) this.inventory = saved.inventory;
+      if (typeof saved.coins === 'number') this.coins = saved.coins;
+      if (typeof saved.preparedServings === 'number') this.preparedServings = saved.preparedServings;
+      if (typeof saved.preparedRevenue === 'number') this.preparedRevenue = saved.preparedRevenue;
+      if (typeof saved.reputation === 'number') this.reputation = saved.reputation;
+      if (typeof saved.lastServiceMessage === 'string') this.lastServiceMessage = saved.lastServiceMessage;
+      if (typeof saved.lastShipyardMessage === 'string') this.lastShipyardMessage = saved.lastShipyardMessage;
+      if (
+        saved.secretQuest === 'available'
+        || saved.secretQuest === 'accepted'
+        || saved.secretQuest === 'completed'
+      ) {
+        this.secretQuest = saved.secretQuest;
+      }
+      if (typeof saved.secretFishCaught === 'boolean') this.secretFishCaught = saved.secretFishCaught;
+      if (typeof saved.boatHp === 'number') this.boatHp = saved.boatHp;
+      if (typeof saved.nightThreat === 'number') this.nightThreat = saved.nightThreat;
+      if (typeof saved.hullLevel === 'number') this.hullLevel = saved.hullLevel;
+      if (typeof saved.rodLevel === 'number') this.rodLevel = saved.rodLevel;
+      if (typeof saved.lastCatch === 'string') this.lastCatch = saved.lastCatch;
+    } catch {
+      // 损坏的临时状态直接忽略，不影响进入钓鱼地图。
+    }
   }
 
   update(_time: number, deltaMs: number) {
@@ -453,13 +595,15 @@ class FishingDemoScene extends Phaser.Scene {
     g.generateTexture('inventory-bait', 64, 64);
     g.clear();
 
-    g.fillStyle(0x26343d).fillRoundedRect(15, 17, 34, 42, 5);
-    g.lineStyle(3, 0xb6c1c3, 1).strokeRoundedRect(15, 17, 34, 42, 5);
-    g.fillStyle(0xb6c1c3).fillRoundedRect(10, 10, 44, 9, 4);
-    g.fillRoundedRect(25, 5, 14, 7, 3);
-    g.lineStyle(2, 0x788b91, 1);
-    g.lineBetween(25, 25, 25, 51);
-    g.lineBetween(39, 25, 39, 51);
+    // 背包丢弃区使用参考图中的纤细象牙白线稿垃圾桶。
+    g.lineStyle(3, 0xf1e9df, 0.96);
+    g.strokeRoundedRect(16, 18, 32, 38, 5);
+    g.lineBetween(11, 16, 53, 16);
+    g.lineBetween(24, 10, 40, 10);
+    g.lineBetween(27, 6, 37, 6);
+    g.lineStyle(2, 0xd8ced5, 0.82);
+    g.lineBetween(26, 25, 26, 48);
+    g.lineBetween(38, 25, 38, 48);
     g.generateTexture('inventory-trash', 64, 64);
     g.clear();
 
@@ -540,8 +684,9 @@ class FishingDemoScene extends Phaser.Scene {
     const texture = this.textures.createCanvas('scene-underwater-seamless', width, height);
     const context = texture.context;
     // 直接调整原图明度和饱和度，避免 Screen 混合把暗部冲成灰白。
-    // 轻度提亮的同时提高饱和度，保留水下原本的蓝紫色层次。
-    context.filter = 'brightness(1.12) saturate(1.2)';
+    context.filter = ACTIVE_MAP_ID === 'fishing-map-02'
+      ? 'brightness(0.76) saturate(0.92)'
+      : 'brightness(1.12) saturate(1.2)';
     context.drawImage(source, 0, 0);
     context.save();
     context.translate(source.width * 2, 0);
@@ -556,8 +701,8 @@ class FishingDemoScene extends Phaser.Scene {
   private createSeamlessWaterTexture() {
     if (this.textures.exists('scene-water-seamless')) return;
     const source = this.textures.get('scene-water').getSourceImage() as HTMLImageElement;
-    const bandY = Math.round(source.height * 0.533);
-    const bandHeight = Math.round(source.height * 0.31);
+    const bandY = Math.round(source.height * ACTIVE_MAP.waterBand.startRatio);
+    const bandHeight = Math.round(source.height * ACTIVE_MAP.waterBand.heightRatio);
     const texture = this.textures.createCanvas(
       'scene-water-seamless',
       source.width * 2,
@@ -601,11 +746,11 @@ class FishingDemoScene extends Phaser.Scene {
       .setDepth(underwaterLayout.depth)
       .setVisible(this.isLayerVisible(underwaterLayout));
 
-    // 新水面素材的上半部透明，只截取从水平线开始的有效水纹带。
+    // 每张地图按自身素材的真实水平线截取，避免把新地图顶部的发光水线裁掉。
     const waterTexture = this.textures.get('scene-water');
     const waterSource = waterTexture.getSourceImage() as HTMLImageElement;
-    const bandY = Math.round(waterSource.height * 0.533);
-    const bandHeight = Math.round(waterSource.height * 0.31);
+    const bandY = Math.round(waterSource.height * ACTIVE_MAP.waterBand.startRatio);
+    const bandHeight = Math.round(waterSource.height * ACTIVE_MAP.waterBand.heightRatio);
     if (!waterTexture.has('usable-band')) {
       waterTexture.add('usable-band', 0, 0, bandY, waterSource.width, bandHeight);
     }
@@ -647,17 +792,33 @@ class FishingDemoScene extends Phaser.Scene {
   ) {
     this.waterlineWorldY = waterLayout.y + waterHeight;
 
-    const blendKey = 'water-underwater-blend';
+    const useMap02Blend = ACTIVE_MAP_ID === 'fishing-map-02';
+    const blendKey = useMap02Blend
+      ? 'water-underwater-blend-map02'
+      : 'water-underwater-blend';
     if (!this.textures.exists(blendKey)) {
-      const blendCanvas = this.textures.createCanvas(blendKey, 16, 140);
+      const blendCanvas = this.textures.createCanvas(
+        blendKey,
+        16,
+        useMap02Blend ? 180 : 140,
+      );
       if (blendCanvas) {
         const ctx = blendCanvas.context;
-        const gradient = ctx.createLinearGradient(0, 0, 0, 140);
-        gradient.addColorStop(0, 'rgba(178, 158, 200, 0.55)');
-        gradient.addColorStop(0.5, 'rgba(120, 118, 176, 0.28)');
-        gradient.addColorStop(1, 'rgba(60, 78, 140, 0)');
+        const gradient = ctx.createLinearGradient(0, 0, 0, useMap02Blend ? 180 : 140);
+        if (useMap02Blend) {
+          // 水面本身不透明，因此用水下顶部颜色由下向上柔和覆盖，
+          // 视觉上等同于把水下场景向上延伸，但不修改水面纹理和流动效果。
+          gradient.addColorStop(0, 'rgba(3, 74, 103, 0)');
+          gradient.addColorStop(0.55, 'rgba(3, 78, 108, 0.28)');
+          gradient.addColorStop(0.84, 'rgba(3, 82, 112, 0.68)');
+          gradient.addColorStop(1, 'rgba(3, 86, 116, 0.88)');
+        } else {
+          gradient.addColorStop(0, 'rgba(178, 158, 200, 0.55)');
+          gradient.addColorStop(0.5, 'rgba(120, 118, 176, 0.28)');
+          gradient.addColorStop(1, 'rgba(60, 78, 140, 0)');
+        }
         ctx.fillStyle = gradient;
-        ctx.fillRect(0, 0, 16, 140);
+        ctx.fillRect(0, 0, 16, useMap02Blend ? 180 : 140);
         blendCanvas.refresh();
       }
     }
@@ -665,14 +826,14 @@ class FishingDemoScene extends Phaser.Scene {
     const blendDepth = Math.max(underwaterLayout.depth + 1, waterLayout.depth - 1);
     this.surfaceBlend = this.add.tileSprite(
       WORLD_WIDTH / 2,
-      this.waterlineWorldY - 6,
+      useMap02Blend ? this.waterlineWorldY - 150 : this.waterlineWorldY - 6,
       WORLD_WIDTH,
-      140,
+      useMap02Blend ? 180 : 140,
       blendKey,
     )
       .setOrigin(0.5, 0)
-      .setDepth(blendDepth)
-      .setAlpha(0.85);
+      .setDepth(useMap02Blend ? waterLayout.depth + 0.5 : blendDepth)
+      .setAlpha(useMap02Blend ? 1 : 0.85);
 
     this.waterlineFoam = this.add.graphics().setDepth(waterLayout.depth + 1);
   }
@@ -728,11 +889,15 @@ class FishingDemoScene extends Phaser.Scene {
       (skyLayout.height ?? VIEW_H) * skyLayout.stretchY,
     );
 
-    this.sceneryStrips = [
-      this.makeImageStrip(this.sceneLayout.layers.far, 8),
-      this.makeImageStrip(this.sceneLayout.layers.middle, 9),
-      this.makeImageStrip(this.sceneLayout.layers.forest, 10),
-    ];
+    this.sceneryStrips = [];
+    for (const [layer, count] of [
+      [this.sceneLayout.layers.far, 8],
+      [this.sceneLayout.layers.middle, 9],
+      [this.sceneLayout.layers.forest, 10],
+    ] as Array<[FishingLayerLayout, number]>) {
+      if (layer.repeatMode === 'single') this.createCopiedLayer(layer);
+      else this.sceneryStrips.push(this.makeImageStrip(layer, count));
+    }
     this.createIslandSequence();
     for (const layer of this.sceneLayout.copies) this.createCopiedLayer(layer);
     this.createEndBarrierIsland();
@@ -770,7 +935,14 @@ class FishingDemoScene extends Phaser.Scene {
     }
 
     if (layer.repeatMode === 'horizontal') {
-      this.sceneryStrips.push(this.makeImageStrip(layer, 6, 1.15));
+      const isMap02FarMountain = ACTIVE_MAP_ID === 'fishing-map-02' && layer.sourceId === 'far';
+      // 新地图远山需要轻微重叠以消除透明边缘接缝，不能沿用装饰图层的留白间距。
+      this.sceneryStrips.push(this.makeImageStrip(
+        layer,
+        isMap02FarMountain ? 8 : 6,
+        // 素材左右各有约 10% 透明安全区，步距必须压到约 78% 才能让山脚真正相接。
+        isMap02FarMountain ? 0.78 : 1.15,
+      ));
       return;
     }
 
@@ -822,6 +994,14 @@ class FishingDemoScene extends Phaser.Scene {
     // 首屏完全使用编辑器保存的布局，不做随机化、缩放、翻转或重新定位。
     for (const layout of allVariants) {
       this.islands.push(this.makeIsland(layout, layout.x));
+    }
+
+    if (ACTIVE_MAP_ID === 'fishing-map-02') {
+      // 遗迹地图的航程后段改由长画布编辑器中的 copies 完全手工布置。
+      // 此处只保留首屏三层，不再额外执行任何前景 PCG。
+      this.islandGenerationIndex = 0;
+      this.islandFoam = this.add.graphics().setDepth(9);
+      return;
     }
 
     // 岛屿以稀疏“岛群”出现：约每 900m 一组，主岛必定是大/小树岛。
@@ -1009,6 +1189,61 @@ class FishingDemoScene extends Phaser.Scene {
       .setDisplaySize(boat.width, boat.width * ratio);
   }
 
+  private createCharacterGlowTexture() {
+    const key = 'boat-character-glow-mask';
+    if (this.textures.exists(key)) return;
+
+    const source = this.textures.get('boat').getSourceImage() as HTMLImageElement;
+    const texture = this.textures.createCanvas(key, source.width, source.height);
+    if (!texture) return;
+
+    const ctx = texture.context;
+    const sx = source.width / 1024;
+    const sy = source.height / (ACTIVE_MAP_ID === 'fishing-map-02' ? 576 : 768);
+    ctx.save();
+    // 只截取合并素材中的主角轮廓；底边藏在船体后方，避免船身一起发光。
+    ctx.beginPath();
+    if (ACTIVE_MAP_ID === 'fishing-map-02') {
+      // 沉蓝遗迹船图中的人物轮廓：白发、肩部、披风与右臂。
+      // 使用独立实心遮罩，只让人物外缘发光，不把船体或原图的大面积青色光环算进去。
+      ctx.moveTo(474 * sx, 5 * sy);
+      ctx.bezierCurveTo(438 * sx, 5 * sy, 418 * sx, 27 * sy, 423 * sx, 58 * sy);
+      ctx.bezierCurveTo(421 * sx, 84 * sy, 436 * sx, 102 * sy, 454 * sx, 109 * sy);
+      ctx.lineTo(438 * sx, 120 * sy);
+      ctx.bezierCurveTo(401 * sx, 126 * sy, 366 * sx, 151 * sy, 338 * sx, 184 * sy);
+      ctx.lineTo(291 * sx, 221 * sy);
+      ctx.lineTo(581 * sx, 239 * sy);
+      ctx.bezierCurveTo(592 * sx, 211 * sy, 589 * sx, 177 * sy, 565 * sx, 149 * sy);
+      ctx.bezierCurveTo(552 * sx, 134 * sy, 532 * sx, 124 * sy, 511 * sx, 118 * sy);
+      ctx.lineTo(501 * sx, 107 * sy);
+      ctx.bezierCurveTo(527 * sx, 95 * sy, 537 * sx, 74 * sy, 531 * sx, 48 * sy);
+      ctx.bezierCurveTo(528 * sx, 20 * sy, 505 * sx, 5 * sy, 474 * sx, 5 * sy);
+      ctx.closePath();
+      // 不再填充整块粗略轮廓，而是直接沿人物外缘绘制一条窄线；
+      // 这样额外辉光会贴住头发、披风和手臂边缘，不会形成三角形光斑。
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth = 5 * Math.max(sx, sy);
+      ctx.lineJoin = 'round';
+      ctx.lineCap = 'round';
+      ctx.stroke();
+    } else {
+      ctx.moveTo(448 * sx, 186 * sy);
+      ctx.bezierCurveTo(418 * sx, 188 * sy, 414 * sx, 215 * sy, 427 * sx, 243 * sy);
+      ctx.lineTo(407 * sx, 264 * sy);
+      ctx.bezierCurveTo(389 * sx, 277 * sy, 366 * sx, 293 * sy, 347 * sx, 316 * sy);
+      ctx.lineTo(338 * sx, 346 * sy);
+      ctx.lineTo(538 * sx, 346 * sy);
+      ctx.bezierCurveTo(537 * sx, 316 * sy, 521 * sx, 291 * sy, 497 * sx, 273 * sy);
+      ctx.lineTo(490 * sx, 246 * sy);
+      ctx.bezierCurveTo(503 * sx, 225 * sy, 499 * sx, 202 * sy, 480 * sx, 191 * sy);
+      ctx.closePath();
+      ctx.clip();
+      ctx.drawImage(source, 0, 0);
+    }
+    ctx.restore();
+    texture.refresh();
+  }
+
   private configureFisherSprite() {
     const source = this.textures.get('fisher').getSourceImage() as HTMLImageElement;
     const ratio = source.width / source.height;
@@ -1020,6 +1255,10 @@ class FishingDemoScene extends Phaser.Scene {
 
   private syncPlayerPositions(worldX: number, bob = 0) {
     this.boat.setPosition(worldX, FISHING_SURFACE_Y + PLAYER_LAYOUT.boat.waterlineOffset + bob);
+    this.characterGlow?.setPosition(
+      this.boat.x + PLAYER_LAYOUT.glow.offsetX,
+      this.boat.y + PLAYER_LAYOUT.glow.offsetY,
+    );
     this.fisher.setPosition(
       this.boat.x + PLAYER_LAYOUT.fisher.offsetX,
       this.boat.y + PLAYER_LAYOUT.fisher.offsetY,
@@ -1051,7 +1290,7 @@ class FishingDemoScene extends Phaser.Scene {
 
   private syncAtmosphereFx() {
     const managementMode = this.inManagementMode;
-    this.atmosphereFx.setVisible(!managementMode);
+    this.atmosphereFx.setVisible(ACTIVE_MAP.atmosphereEnabled && !managementMode);
     this.atmosphereFx.setNightDimmed(this.isNight);
   }
 
@@ -1105,6 +1344,26 @@ class FishingDemoScene extends Phaser.Scene {
   private createPlayer() {
     this.boat = this.add.sprite(this.worldX, FISHING_SURFACE_Y, 'boat').setDepth(PLAYER_LAYOUT.boat.depth);
     this.configureBoatSprite();
+    this.createCharacterGlowTexture();
+    this.characterGlow = this.add.sprite(this.worldX, FISHING_SURFACE_Y, 'boat-character-glow-mask')
+      .setOrigin(this.boat.originX, this.boat.originY)
+      .setDisplaySize(
+        this.boat.displayWidth * PLAYER_LAYOUT.glow.scaleX,
+        this.boat.displayHeight * PLAYER_LAYOUT.glow.scaleY,
+      )
+      // 放在合并船图后面：只让轮廓外侧透出，遮住裁切区域的内部边缘。
+      .setDepth(PLAYER_LAYOUT.boat.depth - 0.1)
+      .setTint(ACTIVE_MAP_ID === 'fishing-map-02' ? 0x57e6dc : 0xffffff)
+      .setAlpha(PLAYER_LAYOUT.glow.alpha)
+      .setBlendMode(Phaser.BlendModes.ADD);
+    this.characterGlow.preFX?.addGlow(
+      ACTIVE_MAP_ID === 'fishing-map-02' ? 0x57e6dc : 0xe8dfff,
+      PLAYER_LAYOUT.glow.strength,
+      ACTIVE_MAP_ID === 'fishing-map-02' ? 0.18 : 0.15,
+      true,
+      ACTIVE_MAP_ID === 'fishing-map-02' ? 0.13 : 0.08,
+      PLAYER_LAYOUT.glow.radius,
+    );
     this.fisher = this.add.sprite(this.worldX, FISHING_SURFACE_Y, 'fisher').setDepth(PLAYER_LAYOUT.fisher.depth);
     this.configureFisherSprite();
     this.fisher.setVisible(false);
@@ -1155,6 +1414,13 @@ class FishingDemoScene extends Phaser.Scene {
       && this.mode !== 'port'
       && this.mode !== 'shipyard'
       && this.mode !== 'dialogue';
+    // 极轻微的呼吸变化让辉光保持“自发光”质感，但不做闪烁。
+    this.characterGlow
+      .setVisible(ACTIVE_MAP.characterGlowEnabled && wakeVisible)
+      .setAlpha(
+        PLAYER_LAYOUT.glow.alpha
+        + Math.sin(this.time.now * 0.0017) * 0.02,
+      );
     if (!wakeVisible) {
       this.boatWakeParticles.length = 0;
       this.boatWakeEmitTimer = 0;
@@ -1165,6 +1431,9 @@ class FishingDemoScene extends Phaser.Scene {
     // 合并图保留了大块透明画布，尾流宽度按可见船体而非整张纹理计算。
     const visibleBoatWidth = PLAYER_LAYOUT.boat.width * 0.4;
     const halfWidth = visibleBoatWidth * 0.43;
+    const useDarkWake = ACTIVE_MAP_ID === 'fishing-map-02';
+    const wakeBaseColor = useDarkWake ? 0x55778a : 0xd8f2ef;
+    const wakeHighlightColor = useDarkWake ? 0x829ba8 : 0xffffff;
     // 泡沫偏移以编辑器中的船体锚点为基准，必须包含船体自身的垂直偏移。
     const waterY = this.boat.y + (PLAYER_LAYOUT.boat.foamYOffset ?? 0);
     const speedRatio = Phaser.Math.Clamp(Math.abs(this.sailSpeed) / MANUAL_SAIL_SPEED, 0, 1);
@@ -1221,9 +1490,9 @@ class FishingDemoScene extends Phaser.Scene {
       boatHalfWidth,
       waterY,
       1.8,
-      0xd8f2ef,
-      0.48,
-      4.4,
+      wakeBaseColor,
+      useDarkWake ? 0.26 : 0.48,
+      useDarkWake ? 3.8 : 4.4,
       time * 1.05,
     );
     drawContinuousFoamRing(
@@ -1232,9 +1501,9 @@ class FishingDemoScene extends Phaser.Scene {
       boatHalfWidth,
       waterY,
       0,
-      0xffffff,
-      0.9,
-      2.35,
+      wakeHighlightColor,
+      useDarkWake ? 0.4 : 0.9,
+      useDarkWake ? 1.8 : 2.35,
       time * 1.45 + 0.8,
     );
 
@@ -1244,8 +1513,8 @@ class FishingDemoScene extends Phaser.Scene {
       bowX - direction * 10,
       waterY + 3,
       direction * (31 + speedRatio * 23),
-      0xffffff,
-      0.72,
+      wakeHighlightColor,
+      useDarkWake ? 0.38 : 0.72,
       1.35,
       time * 2,
     );
@@ -1253,8 +1522,8 @@ class FishingDemoScene extends Phaser.Scene {
       bowX + direction * 2,
       waterY + 8,
       direction * (18 + speedRatio * 14),
-      0xd8f2ef,
-      0.38,
+      wakeBaseColor,
+      useDarkWake ? 0.24 : 0.38,
       0.8,
       time * 1.55 + 2,
     );
@@ -1305,8 +1574,12 @@ class FishingDemoScene extends Phaser.Scene {
         particle.x,
         particle.y + Math.sin(time * 1.3 + particle.phase) * 0.8,
         -particle.direction * particle.length * stretch,
-        particle.foam ? 0xffffff : 0xdaf4f1,
-        fade * (particle.foam ? 0.68 : 0.42),
+        particle.foam ? wakeHighlightColor : wakeBaseColor,
+        fade * (
+          useDarkWake
+            ? (particle.foam ? 0.34 : 0.22)
+            : (particle.foam ? 0.68 : 0.42)
+        ),
         particle.thickness * (1 - progress * 0.35),
         particle.phase + time,
       );
@@ -1488,7 +1761,7 @@ class FishingDemoScene extends Phaser.Scene {
       padding: { x: 9, y: 6 },
     }).setOrigin(0.5).setScrollFactor(0).setDepth(120).setInteractive({ useHandCursor: true });
     editorButton.on('pointerdown', () => {
-      window.location.href = '/fishing-scene-editor.html';
+      window.location.href = `/fishing-scene-editor.html?map=${ACTIVE_MAP_ID}`;
     });
     this.statusText = this.add.text(VIEW_W / 2, 660, '', {
       fontFamily: UI_FONT,
@@ -1668,32 +1941,34 @@ class FishingDemoScene extends Phaser.Scene {
     }).setOrigin(0.5).setScrollFactor(0).setDepth(150).setInteractive({ useHandCursor: true });
     this.inventoryButton.on('pointerdown', () => this.toggleInventory());
 
-    const shade = this.add.rectangle(0, 0, VIEW_W, VIEW_H, 0x071019, 0.72).setOrigin(0);
+    // 轻度压暗场景；主窗体只绘制一层紫灰玻璃，避免出现重叠的双层底板。
+    const shade = this.add.rectangle(0, 0, VIEW_W, VIEW_H, 0x0b0d1a, 0.52).setOrigin(0);
     const window = this.add.graphics();
-    window.fillStyle(0x18232d, 0.98).fillRoundedRect(250, 105, 780, 510, 16);
-    window.lineStyle(1, 0xd7c69d, 0.48).strokeRoundedRect(250, 105, 780, 510, 16);
-    window.fillStyle(0x101820, 0.9).fillRoundedRect(285, 470, 710, 110, 10);
-    window.lineStyle(1, 0xffffff, 0.12).strokeRoundedRect(285, 470, 710, 110, 10);
+    window.fillStyle(0x44394b, 0.66).fillRoundedRect(250, 100, 780, 510, 16);
+    window.lineStyle(1.05, 0xe1d5df, 0.55).strokeRoundedRect(250, 100, 780, 510, 16);
+    window.fillStyle(0x282432, 0.52).fillRoundedRect(285, 472, 710, 105, 10);
+    window.lineStyle(0.9, 0xd1c4d0, 0.3).strokeRoundedRect(285, 472, 710, 105, 10);
 
-    const title = this.add.text(285, 132, '随身背包', {
+    const title = this.add.text(285, 128, '随身背包', {
       fontFamily: UI_FONT_DISPLAY,
       fontStyle: '300',
-      fontSize: '30px',
-      color: UI_COLOR_TITLE,
+      fontSize: '29px',
+      color: '#f4ebe5',
+      shadow: { color: '#100c18', offsetX: 0, offsetY: 2, blur: 5, fill: true },
+    }).setLetterSpacing(1);
+    const subtitle = this.add.text(285, 169, '鱼竿、鱼饵与今日渔获 · 12 格', {
+      fontFamily: UI_FONT,
+      fontStyle: '300',
+      fontSize: '13px',
+      color: '#c9bdc6',
     });
-    const subtitle = this.add.text(285, 177, '鱼竿、鱼饵与今日渔获 · 12 格', {
+    this.inventoryDetail = this.add.text(310, 495, '点击查看物品说明，按住并拖到右侧丢弃区即可丢弃。', {
       fontFamily: UI_FONT,
       fontStyle: '300',
       fontSize: '14px',
-      color: UI_COLOR_MUTED,
-    });
-    this.inventoryDetail = this.add.text(310, 495, '点击查看物品说明；按住并拖到垃圾桶即可丢弃。', {
-      fontFamily: UI_FONT,
-      fontStyle: '300',
-      fontSize: '15px',
-      color: UI_COLOR_BODY,
+      color: '#cec2ca',
       wordWrap: { width: 650 },
-      lineSpacing: 6,
+      lineSpacing: 7,
     });
 
     this.inventoryPanel = this.add.container(0, 0, [
@@ -1707,20 +1982,21 @@ class FishingDemoScene extends Phaser.Scene {
     for (let index = 0; index < 12; index += 1) {
       const column = index % 6;
       const row = Math.floor(index / 6);
-      const x = 345 + column * 120;
-      const y = 270 + row * 100;
+      const x = 330 + column * 112;
+      const y = 246 + row * 104;
       const slotBg = this.add.graphics();
-      slotBg.fillStyle(0x0d151d, 0.92).fillRoundedRect(-42, -42, 84, 84, 8);
-      slotBg.lineStyle(1, 0xffffff, 0.2).strokeRoundedRect(-42, -42, 84, 84, 8);
+      slotBg.fillStyle(0x24212e, 0.7).fillRoundedRect(-42, -42, 84, 84, 8);
+      slotBg.lineStyle(0.9, 0xd3c6d1, 0.38).strokeRoundedRect(-42, -42, 84, 84, 8);
       const icon = this.add.image(0, -2, 'inventory-rod')
         .setDisplaySize(56, 56)
         .setVisible(false);
       const quantity = this.add.text(34, 32, '', {
         fontFamily: UI_FONT,
-        fontSize: '15px',
-        color: '#fff4cf',
-        stroke: '#09121a',
-        strokeThickness: 4,
+        fontStyle: '300',
+        fontSize: '14px',
+        color: '#eadfd7',
+        stroke: '#17131f',
+        strokeThickness: 3,
       }).setOrigin(1, 1);
       const slot = this.add.container(x, y, [slotBg, icon, quantity]).setSize(84, 84).setScrollFactor(0).setDepth(301);
       slot.setInteractive({
@@ -1742,26 +2018,26 @@ class FishingDemoScene extends Phaser.Scene {
     }
 
     const trashBg = this.add.graphics();
-    trashBg.fillStyle(0x111a21, 0.96).fillRoundedRect(-52, -60, 104, 120, 12);
-    trashBg.lineStyle(1, 0xffffff, 0.2).strokeRoundedRect(-52, -60, 104, 120, 12);
-    const trashIcon = this.add.image(0, -12, 'inventory-trash').setDisplaySize(58, 58);
-    const trashText = this.add.text(0, 38, '丢弃', {
+    trashBg.fillStyle(0x302a3c, 0.68).fillRoundedRect(-52, -66, 104, 132, 12);
+    trashBg.lineStyle(0.9, 0xd8cad6, 0.48).strokeRoundedRect(-52, -66, 104, 132, 12);
+    const trashIcon = this.add.image(0, -15, 'inventory-trash').setDisplaySize(54, 54);
+    const trashText = this.add.text(0, 43, '丢弃', {
       fontFamily: UI_FONT,
       fontStyle: '300',
       fontSize: '14px',
-      color: UI_COLOR_MUTED,
+      color: '#ded2d8',
     }).setOrigin(0.5);
-    this.inventoryTrashButton = this.add.container(1100, 300, [trashBg, trashIcon, trashText])
-      .setSize(104, 120)
+    this.inventoryTrashButton = this.add.container(1100, 278, [trashBg, trashIcon, trashText])
+      .setSize(104, 132)
       .setScrollFactor(0)
       .setDepth(302)
       .setVisible(false)
       .setInteractive({
-        hitArea: new Phaser.Geom.Rectangle(-52, -60, 104, 120),
+        hitArea: new Phaser.Geom.Rectangle(-52, -66, 104, 132),
         hitAreaCallback: Phaser.Geom.Rectangle.Contains,
         useHandCursor: true,
       });
-    this.inventoryTrashHitArea = this.add.rectangle(1100, 300, 104, 120, 0xffffff, 0.001)
+    this.inventoryTrashHitArea = this.add.rectangle(1100, 278, 104, 132, 0xffffff, 0.001)
       .setScrollFactor(0)
       .setDepth(303)
       .setVisible(false)
@@ -1778,11 +2054,11 @@ class FishingDemoScene extends Phaser.Scene {
       stroke: '#09121a',
       strokeThickness: 4,
     }).setOrigin(1, 1).setScrollFactor(0).setDepth(311).setVisible(false);
-    this.inventoryCloseButton = this.add.text(970, 128, '关闭  ×', {
+    this.inventoryCloseButton = this.add.text(985, 128, '关闭  ✕', {
       fontFamily: UI_FONT,
       fontStyle: '300',
-      fontSize: '15px',
-      color: UI_COLOR_MUTED,
+      fontSize: '14px',
+      color: '#d7cbd2',
       padding: { x: 8, y: 5 },
     }).setOrigin(1, 0).setScrollFactor(0).setDepth(302).setInteractive({ useHandCursor: true }).setVisible(false);
     this.inventoryCloseButton.on('pointerdown', () => this.toggleInventory(false));
@@ -1805,7 +2081,7 @@ class FishingDemoScene extends Phaser.Scene {
     this.inventoryButton.setVisible(!this.inventoryOpen);
     if (this.inventoryOpen) {
       this.selectedInventoryIndex = -1;
-      this.inventoryDetail.setText('点击查看物品说明；按住并拖到垃圾桶即可丢弃。');
+      this.inventoryDetail.setText('点击查看物品说明，按住并拖到右侧丢弃区即可丢弃。');
       this.refreshInventoryUI();
     } else {
       this.cancelInventoryDrag();
@@ -1819,12 +2095,12 @@ class FishingDemoScene extends Phaser.Scene {
       const icon = this.inventorySlotIcons[index];
       const quantity = this.inventorySlotQuantities[index];
       slotBg.clear();
-      slotBg.fillStyle(index === this.selectedInventoryIndex ? 0x263640 : 0x0d151d, 0.94)
+      slotBg.fillStyle(index === this.selectedInventoryIndex ? 0x514258 : 0x24212e, 0.7)
         .fillRoundedRect(-42, -42, 84, 84, 8);
       slotBg.lineStyle(
-        index === this.selectedInventoryIndex ? 2 : 1,
-        index === this.selectedInventoryIndex ? 0xd7c69d : 0xffffff,
-        index === this.selectedInventoryIndex ? 0.85 : 0.2,
+        index === this.selectedInventoryIndex ? 1.4 : 1,
+        index === this.selectedInventoryIndex ? 0xe5d5ca : 0xc8bbc9,
+        index === this.selectedInventoryIndex ? 0.82 : 0.32,
       ).strokeRoundedRect(-42, -42, 84, 84, 8);
       if (!item) {
         icon.setVisible(false);
@@ -3517,12 +3793,10 @@ class FishingDemoScene extends Phaser.Scene {
   }
 
   private departFromRestaurant() {
-    if (this.secretQuest === 'accepted') {
-      this.resumeNightSailing();
+    if (window.openFishingMapSelect) {
+      window.openFishingMapSelect();
       return;
     }
-    this.isNight = false;
-    this.nightOverlay.setVisible(false);
     this.leavePort();
   }
 
@@ -3602,46 +3876,88 @@ class FishingDemoScene extends Phaser.Scene {
     this.rodTipY = rodPoints[segmentCount].y;
     this.previousRodAngle = this.rodAngle;
 
-    // 柔和的层叠竿身：深色背线提供轮廓，暖灰木色融入低饱和场景。
-    this.rod.lineStyle(5, 0x332b29, 0.72);
-    this.rod.beginPath();
-    this.rod.moveTo(rodPoints[0].x, rodPoints[0].y);
-    for (let i = 1; i <= segmentCount; i += 1) this.rod.lineTo(rodPoints[i].x, rodPoints[i].y);
-    this.rod.strokePath();
-    this.rod.lineStyle(2, 0xb9a27d, 0.96);
-    this.rod.beginPath();
-    this.rod.moveTo(rodPoints[0].x, rodPoints[0].y);
-    for (let i = 1; i <= segmentCount; i += 1) this.rod.lineTo(rodPoints[i].x, rodPoints[i].y);
-    this.rod.strokePath();
+    if (ACTIVE_MAP_ID === 'fishing-map-02') {
+      // 参考图：细长、逐渐收尖的暖棕木竿，不使用现代感明显的大型卷线轮。
+      for (let index = 0; index < segmentCount; index += 1) {
+        const start = rodPoints[index];
+        const end = rodPoints[index + 1];
+        const progress = index / segmentCount;
+        this.rod.lineStyle(Phaser.Math.Linear(5.2, 1.6, progress), 0x142738, 0.78);
+        this.rod.lineBetween(start.x, start.y, end.x, end.y);
+        this.rod.lineStyle(Phaser.Math.Linear(3.1, 0.9, progress), 0x526f7f, 0.98);
+        this.rod.lineBetween(start.x, start.y, end.x, end.y);
+        // 冷蓝环境光只落在朝上的细边，保留木竿质感但压掉突兀的橙红色。
+        this.rod.lineStyle(0.7, 0x8db2bd, 0.52);
+        this.rod.lineBetween(start.x, start.y - 0.6, end.x, end.y - 0.6);
+      }
 
-    // 握把、尾帽与小型卷线轮。
-    this.rod.lineStyle(8, 0x59443a, 1);
-    this.rod.lineBetween(rodPoints[0].x, rodPoints[0].y, rodPoints[2].x, rodPoints[2].y);
-    this.rod.lineStyle(2, 0xb77b52, 0.9);
-    this.rod.lineBetween(rodPoints[0].x, rodPoints[0].y, rodPoints[1].x, rodPoints[1].y);
-    const reelX = rodPoints[2].x + normalX * 6;
-    const reelY = rodPoints[2].y + normalY * 6;
-    this.rod.fillStyle(0x78665a, 1).fillCircle(reelX, reelY, 4);
-    this.rod.lineStyle(1, 0xc5aa78, 0.9).strokeCircle(reelX, reelY, 4);
-    this.rod.fillStyle(0x302a29, 1).fillCircle(reelX, reelY, 1.5);
+      // 短握把和两道绑线，保持参考图中朴素的手工木竿感。
+      this.rod.lineStyle(7, 0x263846, 0.98);
+      this.rod.lineBetween(rodPoints[0].x, rodPoints[0].y, rodPoints[1].x, rodPoints[1].y);
+      this.rod.lineStyle(1.2, 0x7898a3, 0.82);
+      [0.28, 0.68].forEach((t) => {
+        const bindX = Phaser.Math.Linear(rodPoints[0].x, rodPoints[1].x, t);
+        const bindY = Phaser.Math.Linear(rodPoints[0].y, rodPoints[1].y, t);
+        this.rod.lineBetween(bindX - normalX * 3, bindY - normalY * 3, bindX + normalX * 3, bindY + normalY * 3);
+      });
 
-    // 导环跟随每段弯曲位置，保留动态甩竿和受力形变。
-    [3, 5, 7, 8].forEach((index, guideIndex) => {
-      const point = rodPoints[index];
-      const previous = rodPoints[Math.max(0, index - 1)];
-      const tangentX = point.x - previous.x;
-      const tangentY = point.y - previous.y;
-      const tangentLength = Math.max(1, Math.hypot(tangentX, tangentY));
-      const guideNormalX = -tangentY / tangentLength;
-      const guideNormalY = tangentX / tangentLength;
-      const guideOffset = guideIndex === 3 ? 3 : 4;
-      const guideX = point.x + guideNormalX * guideOffset;
-      const guideY = point.y + guideNormalY * guideOffset;
-      this.rod.lineStyle(1, 0x493e39, 0.92);
-      this.rod.lineBetween(point.x, point.y, guideX, guideY);
-      this.rod.lineStyle(1, 0xc6b28f, 0.9);
-      this.rod.strokeCircle(guideX, guideY, guideIndex === 3 ? 2 : 2.5);
-    });
+      // 仅保留三个小型导环，尺寸沿竿尖逐渐缩小。
+      [4, 6, 8].forEach((index, guideIndex) => {
+        const point = rodPoints[index];
+        const previous = rodPoints[index - 1];
+        const tangentX = point.x - previous.x;
+        const tangentY = point.y - previous.y;
+        const tangentLength = Math.max(1, Math.hypot(tangentX, tangentY));
+        const guideNormalX = -tangentY / tangentLength;
+        const guideNormalY = tangentX / tangentLength;
+        const guideOffset = 3.6 - guideIndex * 0.7;
+        const guideX = point.x + guideNormalX * guideOffset;
+        const guideY = point.y + guideNormalY * guideOffset;
+        this.rod.lineStyle(0.85, 0x203441, 0.92);
+        this.rod.lineBetween(point.x, point.y, guideX, guideY);
+        this.rod.lineStyle(0.8, 0x7d9ba5, 0.88);
+        this.rod.strokeCircle(guideX, guideY, 1.8 - guideIndex * 0.3);
+      });
+    } else {
+      // 旧地图保持原有鱼竿造型。
+      this.rod.lineStyle(5, 0x332b29, 0.72);
+      this.rod.beginPath();
+      this.rod.moveTo(rodPoints[0].x, rodPoints[0].y);
+      for (let i = 1; i <= segmentCount; i += 1) this.rod.lineTo(rodPoints[i].x, rodPoints[i].y);
+      this.rod.strokePath();
+      this.rod.lineStyle(2, 0xb9a27d, 0.96);
+      this.rod.beginPath();
+      this.rod.moveTo(rodPoints[0].x, rodPoints[0].y);
+      for (let i = 1; i <= segmentCount; i += 1) this.rod.lineTo(rodPoints[i].x, rodPoints[i].y);
+      this.rod.strokePath();
+
+      this.rod.lineStyle(8, 0x59443a, 1);
+      this.rod.lineBetween(rodPoints[0].x, rodPoints[0].y, rodPoints[2].x, rodPoints[2].y);
+      this.rod.lineStyle(2, 0xb77b52, 0.9);
+      this.rod.lineBetween(rodPoints[0].x, rodPoints[0].y, rodPoints[1].x, rodPoints[1].y);
+      const reelX = rodPoints[2].x + normalX * 6;
+      const reelY = rodPoints[2].y + normalY * 6;
+      this.rod.fillStyle(0x78665a, 1).fillCircle(reelX, reelY, 4);
+      this.rod.lineStyle(1, 0xc5aa78, 0.9).strokeCircle(reelX, reelY, 4);
+      this.rod.fillStyle(0x302a29, 1).fillCircle(reelX, reelY, 1.5);
+
+      [3, 5, 7, 8].forEach((index, guideIndex) => {
+        const point = rodPoints[index];
+        const previous = rodPoints[Math.max(0, index - 1)];
+        const tangentX = point.x - previous.x;
+        const tangentY = point.y - previous.y;
+        const tangentLength = Math.max(1, Math.hypot(tangentX, tangentY));
+        const guideNormalX = -tangentY / tangentLength;
+        const guideNormalY = tangentX / tangentLength;
+        const guideOffset = guideIndex === 3 ? 3 : 4;
+        const guideX = point.x + guideNormalX * guideOffset;
+        const guideY = point.y + guideNormalY * guideOffset;
+        this.rod.lineStyle(1, 0x493e39, 0.92);
+        this.rod.lineBetween(point.x, point.y, guideX, guideY);
+        this.rod.lineStyle(1, 0xc6b28f, 0.9);
+        this.rod.strokeCircle(guideX, guideY, guideIndex === 3 ? 2 : 2.5);
+      });
+    }
   }
 
   private drawFishingLine(dt: number) {
