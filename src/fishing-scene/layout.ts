@@ -382,8 +382,10 @@ function applyMapDefaults(layout: FishingSceneLayout, mapId: FishingMapId) {
   };
 
   layout.layers.underwater.name = '沉蓝水下';
-  // 与水面下沿保留 18px 覆盖，避免水面和深水背景之间露缝。
-  layout.layers.underwater.y = 752;
+  // 用水下原图覆盖水面素材底部的近纯色区域；水面纹理本身保持不变。
+  layout.layers.underwater.y = 720;
+  layout.layers.underwater.height = 1062;
+  layout.layers.underwater.depth = 8.5;
 
   // 新船素材本身已经包含人物和倒影，透明画布占比也比第一张船小。
   layout.player.boat.width = 500;
@@ -507,8 +509,20 @@ export function loadFishingSceneLayout(
       || Math.abs(underwaterY - 752) < 0.001
       || Math.abs(underwaterY - 688) < 0.001
       || Math.abs(underwaterY - 470) < 0.001
+      || Math.abs(underwaterY - 674) < 0.001
     ) {
-      defaults.layers.underwater.y = 752;
+      defaults.layers.underwater.y = mapId === 'fishing-map-02' ? 720 : 752;
+    }
+    if (mapId === 'fishing-map-02') {
+      if (
+        Math.abs((defaults.layers.underwater.height ?? 1030) - 1030) < 0.001
+        || Math.abs((defaults.layers.underwater.height ?? 1108) - 1108) < 0.001
+      ) {
+        defaults.layers.underwater.height = 1062;
+      }
+      if (Math.abs(defaults.layers.underwater.depth - (-5)) < 0.001) {
+        defaults.layers.underwater.depth = 8.5;
+      }
     }
     const defaultRouteCopies = defaults.copies.map((copy) => structuredClone(copy));
     defaults.copies = (saved.copies ?? []).map((copy, index) => {

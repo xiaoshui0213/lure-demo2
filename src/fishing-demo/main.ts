@@ -790,35 +790,25 @@ class FishingDemoScene extends Phaser.Scene {
     underwaterLayout: FishingLayerLayout,
     waterHeight: number,
   ) {
-    this.waterlineWorldY = waterLayout.y + waterHeight;
+    this.waterlineWorldY = ACTIVE_MAP_ID === 'fishing-map-02'
+      ? underwaterLayout.y
+      : waterLayout.y + waterHeight;
+    this.waterlineFoam = this.add.graphics().setDepth(waterLayout.depth + 1);
 
-    const useMap02Blend = ACTIVE_MAP_ID === 'fishing-map-02';
-    const blendKey = useMap02Blend
-      ? 'water-underwater-blend-map02'
-      : 'water-underwater-blend';
+    // 第二关直接使用原水面和原水下素材；额外的纯色渐变会形成明显色带。
+    if (ACTIVE_MAP_ID === 'fishing-map-02') return;
+
+    const blendKey = 'water-underwater-blend';
     if (!this.textures.exists(blendKey)) {
-      const blendCanvas = this.textures.createCanvas(
-        blendKey,
-        16,
-        useMap02Blend ? 180 : 140,
-      );
+      const blendCanvas = this.textures.createCanvas(blendKey, 16, 140);
       if (blendCanvas) {
         const ctx = blendCanvas.context;
-        const gradient = ctx.createLinearGradient(0, 0, 0, useMap02Blend ? 180 : 140);
-        if (useMap02Blend) {
-          // 水面本身不透明，因此用水下顶部颜色由下向上柔和覆盖，
-          // 视觉上等同于把水下场景向上延伸，但不修改水面纹理和流动效果。
-          gradient.addColorStop(0, 'rgba(3, 74, 103, 0)');
-          gradient.addColorStop(0.55, 'rgba(3, 78, 108, 0.28)');
-          gradient.addColorStop(0.84, 'rgba(3, 82, 112, 0.68)');
-          gradient.addColorStop(1, 'rgba(3, 86, 116, 0.88)');
-        } else {
-          gradient.addColorStop(0, 'rgba(178, 158, 200, 0.55)');
-          gradient.addColorStop(0.5, 'rgba(120, 118, 176, 0.28)');
-          gradient.addColorStop(1, 'rgba(60, 78, 140, 0)');
-        }
+        const gradient = ctx.createLinearGradient(0, 0, 0, 140);
+        gradient.addColorStop(0, 'rgba(178, 158, 200, 0.55)');
+        gradient.addColorStop(0.5, 'rgba(120, 118, 176, 0.28)');
+        gradient.addColorStop(1, 'rgba(60, 78, 140, 0)');
         ctx.fillStyle = gradient;
-        ctx.fillRect(0, 0, 16, useMap02Blend ? 180 : 140);
+        ctx.fillRect(0, 0, 16, 140);
         blendCanvas.refresh();
       }
     }
@@ -826,16 +816,14 @@ class FishingDemoScene extends Phaser.Scene {
     const blendDepth = Math.max(underwaterLayout.depth + 1, waterLayout.depth - 1);
     this.surfaceBlend = this.add.tileSprite(
       WORLD_WIDTH / 2,
-      useMap02Blend ? this.waterlineWorldY - 150 : this.waterlineWorldY - 6,
+      this.waterlineWorldY - 6,
       WORLD_WIDTH,
-      useMap02Blend ? 180 : 140,
+      140,
       blendKey,
     )
       .setOrigin(0.5, 0)
-      .setDepth(useMap02Blend ? waterLayout.depth + 0.5 : blendDepth)
-      .setAlpha(useMap02Blend ? 1 : 0.85);
-
-    this.waterlineFoam = this.add.graphics().setDepth(waterLayout.depth + 1);
+      .setDepth(blendDepth)
+      .setAlpha(0.85);
   }
 
   private drawWaterlineFoam() {
